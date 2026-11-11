@@ -226,3 +226,6 @@ void cfg_ed25519_seed(uint8_t seed[32]) {
   esp_fill_random(seed, 32);
   prefs.putBytes("ed_seed", seed, 32);
 }
+
+String net_ap_ssid() { return apSsid; }
+String net_ap_pass() { return apPass; }

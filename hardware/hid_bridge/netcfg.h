@@ -10,6 +10,8 @@ String net_json(bool vtok = true);       // value of the `net` characteristic (t
 void net_request(const String &json);    // `net` write; applied by net_poll()
 const char *net_mode();                  // "ap" | "sta" | "none" (station not connected)
 String net_ip();
+String net_ap_ssid();                     // hotspot name and password (AP mode), for a status screen
+String net_ap_pass();
 int net_peers();                         // stations on our SoftAP, or 1 when connected as a station
 bool net_up();                           // has an IP address
 bool net_coex(const String &pref);       // Wi-Fi/BLE radio share: "bt" | "balance" (boot default) | "wifi"

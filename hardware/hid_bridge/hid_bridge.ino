@@ -368,6 +368,32 @@ void startAirplay() {
   if (!airplay_start(&cfg)) board_log("airplay: start failed");
 }
 
+#if BOARD_AMOLED_216
+#include "status_screen.h"
+// Built-in display (flash.sh --amoled216): what the board is doing, so a test needs no serial monitor.
+// Drawn from loop(), not from a task of its own: internal RAM is tight, and the AirPlay mirror task needs
+// an 8 KB block when mirroring starts (a 6 KB screen task stack left the largest block at 8180 bytes and
+// mirroring failed with "setup: mirror stream failed").
+static bool screenOk = false;
+void screenPoll() {
+  static uint32_t next = 0;
+  if (!screenOk || (int32_t)(millis() - next) < 0) return;
+  next = millis() + 500;
+  ScreenInfo s;
+  s.fw = FW_VERSION;
+  s.usb = usbState();
+  s.net = net_mode();
+  s.ssid = net_ap_ssid();
+  s.pass = net_ap_pass();
+  s.ip = net_ip();
+  s.ble = ble_connected();
+  s.cli = cli_slot() >= 0;
+  s.airplay = airplay_state();
+  s.fps = video_stats(FROM_APP).fps;
+  screen_show(s);
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
 #if OTA_CRASH_TEST  // flash.sh --crash-test: an image that never comes up, to check the rollback after an update
@@ -397,6 +423,10 @@ void setup() {
   ble_begin("ESP32 Agent " + board_suffix());
   startAirplay();
   xTaskCreatePinnedToCore(statusTask, "status", 4096, NULL, 1, NULL, 1);
+#if BOARD_AMOLED_216
+  screenOk = screen_begin();
+  if (!screenOk) board_log("screen: panel did not start");
+#endif
   board_log("boot %s fw %s: free internal heap %u (largest %u), PSRAM %u, reset %s\n", receiverName.c_str(), FW_VERSION,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
@@ -407,6 +437,9 @@ void loop() {
   static bool linked = false, cliLinked = false;
   esp_task_wdt_reset();
   net_poll();
+#if BOARD_AMOLED_216
+  screenPoll();
+#endif
   bool cli = cli_slot() >= 0;
   // A gesture cut off mid-way must not leave the button held (long press); only the side that went holds it.
   bool app = ble_app_connected(), appActive = ble_app_active();
