@@ -251,6 +251,10 @@ static bool audioStart() {
 }
 
 void wv_audio(int event, const uint8_t *frame, size_t len, uint32_t ts) {
+#if NO_PHONE_AUDIO  // flash.sh --lean: the phone's audio is dropped; the task, queue and its buffers are left out
+  (void)event, (void)frame, (void)len, (void)ts;
+  return;
+#endif
   if (!(audioWanted && wv_active()) && !cli_audio_wanted()) return;
   if (len > WV_PAYLOAD - 8 || !audioStart()) { audioDrops++; return; }  // a record must fit one TCP record
   uint8_t q[1 + 8 + WV_PAYLOAD];

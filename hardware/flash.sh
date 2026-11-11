@@ -6,6 +6,7 @@
 #   --build-only  compile only (prints flash/RAM usage)
 #   --amoled216   Waveshare ESP32-S3-Touch-AMOLED-2.16: show the board status on its display
 #                 (needs: arduino-cli lib install "GFX Library for Arduino@1.6.9")
+#   --lean        leave out Wi-Fi firmware updates and phone audio forwarding (more free internal RAM)
 #   --ap-tune     A/B build: hotspot on a 20 MHz channel with 300 TU beacons (more airtime for BLE)
 # BLE host: h2zero NimBLE-Arduino (arduino-cli lib install "NimBLE-Arduino"); its buffer sizes live in
 # hid_bridge/nimble_cfg.h, force-included into every C/C++ file below.
@@ -24,6 +25,7 @@ for a in "$@"; do
     --build-only) BUILD_ONLY=1 ;;
     --ap-tune) DEFS+=" -DAP_TUNE=1" ;;
     --amoled216) DEFS+=" -DBOARD_AMOLED_216=1 -DESP32QSPI_MAX_PIXELS_AT_ONCE=256" ;;  # Waveshare ESP32-S3-Touch-AMOLED-2.16: status on its screen
+    --lean) DEFS+=" -DNO_OTA=1 -DNO_PHONE_AUDIO=1" ;;  # no Wi-Fi updates, no phone audio: frees internal RAM
     --crash-test) DEFS+=" -DOTA_CRASH_TEST=1" ;;  # build only, then push it with ota_push.py
     --small-gop) DEFS+=" -DGOP_CAP_KB=256" ;;  # test build: the GOP fills (freezes) within minutes
     *) PORT=$a ;;

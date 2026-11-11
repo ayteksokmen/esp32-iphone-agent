@@ -103,7 +103,13 @@ bool ota_begin() {
   esp_ota_get_state_partition(run, &a);
   if (other) esp_ota_get_state_partition(other, &b);
   board_log("ota: running %s (%s), other %s (%s)", run->label, stateName(a), other ? other->label : "-", stateName(b));
-  return xTaskCreatePinnedToCore(otaTask, "ota", 6144, NULL, 2, NULL, 1) == pdPASS; }
+#if NO_OTA  // flash.sh --lean: updates over USB only; saves the task's 6 KB stack and the 4 KB receive buffer
+  board_log("ota: left out of this build (--lean)");
+  return true;
+#else
+  return xTaskCreatePinnedToCore(otaTask, "ota", 6144, NULL, 2, NULL, 1) == pdPASS;
+#endif
+}
 
 bool ota_busy() { return busy; }
 
