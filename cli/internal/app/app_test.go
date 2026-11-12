@@ -170,6 +170,15 @@ func TestSimPairScreenshotTapText(t *testing.T) {
 	if o := run(t, a, "io", "text", "拿铁 ok"); o.Status != "ok" {
 		t.Fatalf("text: %+v", o)
 	}
+	// a step in one call: the screen after the tap is saved with it
+	o = run(t, a, "io", "tap", "240,520", "--screenshot", dir+"/after.png")
+	sh, _ := o.Data["screenshot"].(map[string]any)
+	if o.Status != "ok" || sh == nil || sh["filePath"] != dir+"/after.png" {
+		t.Fatalf("tap --screenshot: %+v", o)
+	}
+	if _, err := os.Stat(dir + "/after.png"); err != nil {
+		t.Fatal(err)
+	}
 	if o := run(t, a, "device", "info"); o.Status != "ok" || o.Data["ap"] != "streaming" {
 		t.Fatalf("info: %+v", o)
 	}

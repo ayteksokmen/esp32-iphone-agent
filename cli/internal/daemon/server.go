@@ -36,6 +36,9 @@ type Request struct {
 	MaxSize int       `json:"max_size,omitempty"`
 	Aim     bool      `json:"aim,omitempty"`
 	Count   int       `json:"count,omitempty"` // taps in a row at one point (2: double tap)
+	// Shot: an io command also returns the screen after it (as a screenshot does, in Format / MaxSize), saving the
+	// agent a round trip per step.
+	Shot bool `json:"shot,omitempty"`
 }
 
 // Response is the CLI's JSON output, as mobilecli's: {"status":"ok","data":…} or {"status":"error","error":"…"}.

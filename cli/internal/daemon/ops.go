@@ -171,21 +171,30 @@ func encode(img image.Image, format string, quality int, scale float64, maxSize 
 }
 
 func (s *Server) screenshot(ctx context.Context, c *Conn, req Request) Response {
-	img, err := s.frame(ctx, c)
+	shot, err := s.shot(ctx, c, req)
 	if err != nil {
 		return fail(err)
 	}
+	return ok(shot)
+}
+
+// shot is the screen after the last action, encoded as req asks.
+func (s *Server) shot(ctx context.Context, c *Conn, req Request) (map[string]any, error) {
+	img, err := s.frame(ctx, c)
+	if err != nil {
+		return nil, err
+	}
 	data, r, err := encode(img, req.Format, req.Quality, req.Scale, req.MaxSize)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	format := "png"
 	if req.Format == "jpeg" || req.Format == "jpg" {
 		format = "jpeg"
 	}
 	s.recordShot(img, r.Dx(), r.Dy())
-	return ok(map[string]any{"format": format, "data": base64.StdEncoding.EncodeToString(data),
-		"width": r.Dx(), "height": r.Dy(), "device": c.ID})
+	return map[string]any{"format": format, "data": base64.StdEncoding.EncodeToString(data),
+		"width": r.Dx(), "height": r.Dy(), "device": c.ID}, nil
 }
 
 func (c *Conn) pointer(dir string) *pointer.Pointer {
@@ -305,10 +314,17 @@ func (s *Server) io(ctx context.Context, c *Conn, req Request) Response {
 	if err != nil {
 		return fail(err)
 	}
-	out := map[string]string{"message": req.Cmd + " done"}
+	out := map[string]any{"message": req.Cmd + " done"}
 	if req.Cmd == "text" && pointer.HasHan(req.Text) {
 		out["typed_as"] = pointer.Typeable(req.Text)
 		out["note"] = "needs the iPhone's Chinese (pinyin) keyboard; if letters appear, tap the globe key and type again"
+	}
+	if req.Shot { // the action went through either way: a failed screen is reported, not an error
+		if shot, err := s.shot(ctx, c, req); err != nil {
+			out["screenshot_error"] = err.Error()
+		} else {
+			out["screenshot"] = shot
+		}
 	}
 	return ok(out)
 }

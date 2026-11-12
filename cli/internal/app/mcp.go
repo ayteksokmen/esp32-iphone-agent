@@ -62,6 +62,18 @@ var (
 	}
 )
 
+// Action tools return the screen after them unless told not to (see callTool).
+func init() {
+	for _, t := range tools {
+		switch t.Name {
+		case "tap", "longpress", "swipe", "type_text", "press_key", "press_button":
+			props := t.InputSchema["properties"].(map[string]any)
+			props["screenshot"] = map[string]any{"type": "boolean",
+				"description": "return the screen after the action (default true)"}
+		}
+	}
+}
+
 func (a *App) mcp(in io.Reader) int {
 	r := bufio.NewReaderSize(in, 1<<20)
 	enc := json.NewEncoder(a.Out)
@@ -96,8 +108,10 @@ func (a *App) handleRPC(m rpcMsg) *rpcMsg {
 			p.ProtocolVersion = "2025-06-18"
 		}
 		resp.Result = raw(map[string]any{"protocolVersion": p.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}},
-			"serverInfo":   map[string]string{"name": "esp32agent", "version": Version},
-			"instructions": "Drives a real iPhone through an ESP32 Agent board. Loop: screenshot, decide, one action, screenshot again."})
+			"serverInfo": map[string]string{"name": "esp32agent", "version": Version},
+			"instructions": "Drives a real iPhone through an ESP32 Agent board. Loop: screenshot, decide, one action. " +
+				"Actions return the screen after them, so no screenshot call is needed between steps " +
+				"(pass screenshot: false to skip it, e.g. in a run of steps whose result you already know)."})
 	case "ping":
 		resp.Result = raw(map[string]any{})
 	case "tools/list":
@@ -158,6 +172,11 @@ func (a *App) callTool(name string, args map[string]any) map[string]any {
 	default:
 		return textResult("unknown tool "+name, true)
 	}
+	switch name {
+	case "tap", "longpress", "swipe", "type_text", "press_key", "press_button":
+		want, set := args["screenshot"].(bool)
+		req.Shot = !set || want // the screen after the action comes back with it: one call per step
+	}
 	line, err := a.Client.Call(req)
 	if err != nil {
 		return textResult(err.Error(), true)
@@ -181,6 +200,25 @@ func (a *App) callTool(name string, args map[string]any) map[string]any {
 		return map[string]any{"content": []map[string]any{
 			{"type": "image", "data": d.Data, "mimeType": "image/" + d.Format},
 			{"type": "text", "text": fmt.Sprintf("%dx%d screenshot; tap coordinates are pixels of this image", d.Width, d.Height)},
+		}, "isError": false}
+	}
+	if req.Shot {
+		var d struct {
+			Message         string `json:"message"`
+			ScreenshotError string `json:"screenshot_error"`
+			Screenshot      *struct {
+				Format, Data  string
+				Width, Height int
+			} `json:"screenshot"`
+		}
+		json.Unmarshal(r.Raw, &d)
+		if d.Screenshot == nil {
+			return textResult(d.Message+"; no screenshot: "+d.ScreenshotError, false)
+		}
+		return map[string]any{"content": []map[string]any{
+			{"type": "text", "text": fmt.Sprintf("%s; the screen after it (%dx%d, tap coordinates are pixels of this image):",
+				d.Message, d.Screenshot.Width, d.Screenshot.Height)},
+			{"type": "image", "data": d.Screenshot.Data, "mimeType": "image/" + d.Screenshot.Format},
 		}, "isError": false}
 	}
 	if name == "phone_audio" {
