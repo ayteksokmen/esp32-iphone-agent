@@ -31,6 +31,10 @@ const (
 	// FreshWait: how long a wiggle waits for a frame captured after it. Over BLE, video yields to commands, and a
 	// frame often took over a second: calibration with 1 s saw no pointer (2026-11-06).
 	FreshWait = 3 * time.Second
+	// BottomEdge: the home-bar flick presses only with the pointer seen this low (see HomeSwipe).
+	BottomEdge = 0.96
+	// FlickSpeed: mouse units per report for the home-bar flick (see HomeSwipe).
+	FlickSpeed = 40
 	// HomeRest: iOS smooths pointer speed over the last reports, so right after `home` (fast reports) the first units
 	// of the next move went several times further: 24 units crossed 31% of the screen, the next 116 only 60%
 	// (2026-11-12). Resting after `home` lets that speed die down; phone.py's home rested 80 ms too.
@@ -725,9 +729,42 @@ func later(a, b time.Time) time.Time {
 }
 
 // HomeSwipe is a real home-bar flick (a flick, not a rest: resting opens the app switcher).
+//
+// The press must land on the bottom edge: pressed anywhere else it is a tap. On 2026-11-12 the flick from Search
+// pressed on the dock and opened WhatsApp, and the next one opened a chat in it. So the pointer is pushed past the
+// bottom edge (iOS clamps it there whatever the estimate), and with video the flick only goes ahead once the
+// pointer is seen on that edge; otherwise nothing is pressed.
 func (p *Pointer) HomeSwipe(ctx context.Context) error {
 	defer func() { p.pos = nil }() // edge clamping invalidates the tracked position
-	return p.Swipe(ctx, 0.5, 0.995, 0.5, 0.15, false)
+	if err := p.Point(ctx, 0.5, 0.9, false); err != nil {
+		return err
+	}
+	if err := p.send(ctx, "move 0 %d", p.Span.H/2); err != nil { // pin it to the bottom edge
+		return err
+	}
+	if err := p.glide(ctx); err != nil {
+		return err
+	}
+	if p.screen != nil && p.screen.Live() {
+		pt, ok, err := p.measure(ctx, 0.5, 1)
+		if err != nil {
+			return err
+		}
+		p.Log(fmt.Sprintf("home swipe: pointer found %v at %.3f, %.3f", ok, pt.X, pt.Y))
+		if !ok || pt.Y < BottomEdge || math.Abs(pt.X-0.5) > 0.2 {
+			return errors.New("did not swipe up: the pointer was not on the bottom edge, and a press elsewhere would tap the screen")
+		}
+	}
+	if err := p.send(ctx, "press"); err != nil {
+		return err
+	}
+	// Fast: at the usual 10 units a report the stroke took ~0.5 s, and on the Home Screen iOS read it as a swipe and
+	// hold, opening the app switcher (2026-11-12). 40 a report (the board's most) is a flick.
+	err := p.send(ctx, "move 0 %d %d", -int(0.85*float64(p.Span.H)), FlickSpeed)
+	if rerr := p.send(context.WithoutCancel(ctx), "release"); err == nil {
+		err = rerr
+	}
+	return err
 }
 
 func (p *Pointer) dx(x float64) int {

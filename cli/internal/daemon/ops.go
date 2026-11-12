@@ -76,6 +76,9 @@ func (s *Server) frame(ctx context.Context, c *Conn) (image.Image, error) {
 			return nil, errors.New("no video from the board yet; try again")
 		}
 	}
+	if err := s.recent(ctx, c); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	acted, shot := c.lastAction, c.lastShot
 	c.mu.Unlock()
@@ -91,6 +94,45 @@ func (s *Server) frame(ctx context.Context, c *Conn) (image.Image, error) {
 	}
 	return c.Frame(), nil
 }
+
+// recent makes sure the frame about to be returned is the screen now. AirPlay sends nothing while the screen is
+// still, so a frame's age alone says little; it must be the latest the board got, judged by when the phone captured
+// it, not when it arrived. On 2026-11-12 a fresh daemon decoded the board's buffered GOP and returned a picture from
+// five minutes before (Search, while the phone showed the app switcher): it had only just arrived.
+func (s *Server) recent(ctx context.Context, c *Conn) error {
+	wait := func(d time.Duration) bool {
+		for end := time.Now().Add(d); ; {
+			if ok, _ := c.current(); ok {
+				return true
+			}
+			if time.Now().After(end) || sleepCtx(ctx, 100*time.Millisecond) != nil {
+				return false
+			}
+		}
+	}
+	if st, age := c.Status(); age > 5*time.Second {
+		return fmt.Errorf("no word from the board for %.0f s; try again", age.Seconds())
+	} else if st["ap"] != "streaming" {
+		return errMirroring
+	}
+	if _, since := c.current(); since > SilentFor {
+		return fmt.Errorf("the iPhone has sent no picture for %.0f s (is its screen locked or off?); wake it and try again",
+			since.Seconds())
+	}
+	if wait(3 * time.Second) {
+		return nil
+	}
+	sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	_, err := c.Send(sctx, "snap")
+	cancel()
+	if err == nil && wait(5*time.Second) {
+		return nil
+	}
+	return errors.New("the latest picture from the iPhone did not come through, only older ones; try again")
+}
+
+// SilentFor: an unlocked iPhone sends a frame at least when its clock turns over, once a minute.
+const SilentFor = 75 * time.Second
 
 func encode(img image.Image, format string, quality int, scale float64, maxSize int) ([]byte, image.Rectangle, error) {
 	b := img.Bounds()
@@ -209,6 +251,13 @@ func (s *Server) io(ctx context.Context, c *Conn, req Request) Response {
 		case "button":
 			if !strings.EqualFold(req.Text, "HOME") {
 				return fmt.Errorf("button %s not supported on ESP32 Agent (only HOME)", req.Text)
+			}
+			// GoHome checks each try against the screen; with no frame yet (a fresh daemon) it trusted the Home key,
+			// which some iPhones ignore (2026-11-12). Get the screen first when mirroring is on.
+			if s.videoState(ctx, c) == nil {
+				if _, err := s.frame(ctx, c); err != nil {
+					return err
+				}
 			}
 			return p.GoHome(ctx)
 		}

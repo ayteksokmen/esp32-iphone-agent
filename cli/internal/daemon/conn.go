@@ -294,17 +294,19 @@ func (c *Conn) onStatus(b []byte) {
 	c.statusAt = now
 	notify = m["owner"] == "app" || m["busy"] == float64(1)
 	if up, ok := m["up"].(float64); ok {
-		c.learnClock(now, uint32(up))
+		c.learnClock(now, uint32(up), true)
 	}
 }
 
 // learnClock must hold mu.
-func (c *Conn) learnClock(now time.Time, boardMs uint32) {
+func (c *Conn) learnClock(now time.Time, boardMs uint32, status bool) {
 	off := now.UnixMilli() - int64(boardMs)
 	// The smallest offset is kept (the least link delay), but a board that restarted (unplugged from the Mac and
 	// plugged into the iPhone) counts from 0 again: its offset jumps up by seconds and the old one put every frame in
-	// the past, so calibration never saw a frame after its nudges (2026-11-12). A jump that big is a new clock.
-	if c.offset == nil || off < *c.offset || off-*c.offset > 5000 {
+	// the past, so calibration never saw a frame after its nudges (2026-11-12). A jump that big is a new clock, but
+	// only in a status (its uptime is now): a video chunk's time is when the board got that frame, and a replayed
+	// GOP minutes old reset the clock to it, so its frames passed for fresh (2026-11-12).
+	if c.offset == nil || off < *c.offset || status && off-*c.offset > 5000 {
 		c.offset = &off
 	}
 }
@@ -316,7 +318,7 @@ func (c *Conn) onVideo(chunk []byte, gap bool) {
 		c.re.Lost()
 	}
 	if len(chunk) >= 7 && chunk[2]&video.Start != 0 {
-		c.learnClock(time.Now(), binary.LittleEndian.Uint32(chunk[3:]))
+		c.learnClock(time.Now(), binary.LittleEndian.Uint32(chunk[3:]), false)
 	}
 	au := c.re.Feed(chunk)
 	if au == nil {
@@ -426,6 +428,20 @@ func (c *Conn) times() (captured, updated, changed time.Time, wake chan struct{}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.captured, c.updated, c.changed, c.wake
+}
+
+// current: the frame held is the board's latest (captured no earlier than the last frame the board got, by its last
+// status), and how long ago the phone sent that one. A still screen sends no frames, so an old frame can be current.
+func (c *Conn) current() (bool, time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	up, ok1 := c.status["up"].(float64)
+	vage, ok2 := c.status["vage"].(float64)
+	if !ok1 || !ok2 || c.offset == nil || c.frame == nil {
+		return false, 0
+	}
+	latest := time.UnixMilli(int64(up) - int64(vage) + *c.offset)
+	return !c.captured.Before(latest.Add(-300 * time.Millisecond)), time.Since(latest)
 }
 
 // Settled waits until the screen stops changing. AirPlay keeps sending frames of a still screen, so this

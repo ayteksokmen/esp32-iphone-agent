@@ -128,8 +128,29 @@ func TestHomeSwipeIsAFlickFromTheHomeBar(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(d.sent, ",")
-	if !strings.Contains(joined, "press") || d.sent[len(d.sent)-1] != "release" || !strings.Contains(joined, "move 0 -676") {
+	if !strings.Contains(joined, "move 0 400,press,move 0 -680 40,release") {
 		t.Fatalf("sent %v", d.sent)
+	}
+}
+
+// With video the flick presses only once the pointer is seen pinned to the bottom edge: pressed anywhere else
+// it is a tap (it opened WhatsApp from the dock, 2026-11-12).
+func TestHomeSwipePressesOnlyOnTheBottomEdge(t *testing.T) {
+	d := &fakeDevice{maxX: 410, maxY: 870}
+	p := newPointer(t, d, &fakeScreen{d: d})
+	p.FinishCalibration(0.5, 0.25)
+	if err := p.HomeSwipe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(d.sent, ","), "press") {
+		t.Fatalf("sent %v", d.sent)
+	}
+
+	d = &fakeDevice{} // a pointer much slower than calibrated stops mid-screen
+	p = newPointer(t, d, &fakeScreen{d: d, w: 410, h: 3000})
+	p.FinishCalibration(0.5, 0.25)
+	if err := p.HomeSwipe(context.Background()); err == nil || strings.Contains(strings.Join(d.sent, ","), "press") {
+		t.Fatalf("err %v sent %v", err, d.sent)
 	}
 }
 
