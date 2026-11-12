@@ -128,7 +128,17 @@ func (s *Server) recent(ctx context.Context, c *Conn) error {
 	if err == nil && wait(5*time.Second) {
 		return nil
 	}
-	return errors.New("the latest picture from the iPhone did not come through, only older ones; try again")
+	captured, _, _, _ := c.times()
+	_, since := c.current()
+	return fmt.Errorf("the latest picture from the iPhone did not come through, only older ones (the newest here is "+
+		"%s old, the phone's latest %.0f s); try again", age(captured), since.Seconds())
+}
+
+func age(t time.Time) string {
+	if t.IsZero() {
+		return "of unknown age"
+	}
+	return fmt.Sprintf("%.0f s", time.Since(t).Seconds())
 }
 
 // SilentFor: an unlocked iPhone sends a frame at least when its clock turns over, once a minute.

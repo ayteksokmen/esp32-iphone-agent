@@ -10,6 +10,7 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"time"
 
 	"golang.org/x/image/bmp"
 )
@@ -23,14 +24,18 @@ type Frame struct {
 // Decoder is an ffmpeg process: Annex-B in, one BMP per picture out. (Not PNG: ffmpeg's PNG encoder holds
 // each picture until the next one arrives, a whole frame of latency.)
 type Decoder struct {
-	cmd    *exec.Cmd
-	in     io.WriteCloser
-	queue  chan AU
-	mu     sync.Mutex
-	ts     []uint32 // board times of AUs in flight, oldest first
-	stderr bytes.Buffer
-	done   chan struct{}
-	err    error
+	cmd   *exec.Cmd
+	in    io.WriteCloser
+	queue chan AU
+	mu    sync.Mutex
+	ts    []uint32 // board times of AUs in flight, oldest first
+	// Resync when idle (see idle): the last picture out, and the last AU fed, with when.
+	lastImg          image.Image
+	lastOut, lastFed time.Time
+	lastFedTS        uint32
+	stderr           bytes.Buffer
+	done             chan struct{}
+	err              error
 }
 
 // FFmpeg finds the ffmpeg binary.
@@ -67,6 +72,7 @@ func NewDecoder(ffmpeg string, onFrame func(Frame)) (*Decoder, error) {
 		return nil, err
 	}
 	go d.feed()
+	go d.idle(onFrame)
 	go func() {
 		r := bufio.NewReaderSize(out, 1<<20)
 		for {
@@ -77,6 +83,9 @@ func NewDecoder(ffmpeg string, onFrame func(Frame)) (*Decoder, error) {
 			img, err := bmp.Decode(bytes.NewReader(raw))
 			ts := d.popTS()
 			if err == nil {
+				d.mu.Lock()
+				d.lastImg, d.lastOut = img, time.Now()
+				d.mu.Unlock()
 				onFrame(Frame{Img: img, TS: ts})
 			}
 		}
@@ -88,6 +97,38 @@ func NewDecoder(ffmpeg string, onFrame func(Frame)) (*Decoder, error) {
 	}()
 	return d, nil
 }
+
+// idle: once ffmpeg has had nothing to do for a while, the picture out is the last AU's. Times still queued then
+// belong to pictures ffmpeg dropped (undecodable ones), and each would have put every later picture one further in
+// the past: a live screen read as 30 s old (2026-11-12). So: drop them, and give the last picture the last AU's time.
+func (d *Decoder) idle(onFrame func(Frame)) {
+	t := time.NewTicker(200 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-d.done:
+			return
+		case <-t.C:
+		}
+		d.mu.Lock()
+		quiet := len(d.queue) == 0 && len(d.ts) > 0 && d.lastImg != nil &&
+			time.Since(d.lastFed) > IdleAfter && time.Since(d.lastOut) > IdleAfter
+		img, ts := d.lastImg, d.lastFedTS
+		if quiet {
+			d.ts = d.ts[:0]
+		}
+		d.mu.Unlock()
+		if quiet {
+			onFrame(Frame{Img: img, TS: ts})
+		}
+	}
+}
+
+// IdleAfter: how long ffmpeg has had no input and given no output before it counts as idle (see idle).
+const IdleAfter = 400 * time.Millisecond
+
+// maxPending: pictures fed to ffmpeg and not out yet whose times are kept (see feed).
+const maxPending = 8192
 
 func (d *Decoder) popTS() uint32 {
 	d.mu.Lock()
@@ -106,9 +147,13 @@ func (d *Decoder) feed() {
 			// parameter sets only: no picture comes out of it
 		} else {
 			d.mu.Lock()
+			d.lastFed, d.lastFedTS = time.Now(), au.TS
 			d.ts = append(d.ts, au.TS)
-			if len(d.ts) > 30 { // a picture ffmpeg dropped would skew every later time; never by much
-				d.ts = d.ts[len(d.ts)-30:]
+			// Bounded, but far above a GOP: the board sends its whole GOP on a snap (a still screen's runs minutes,
+			// over a thousand pictures) faster than ffmpeg decodes it. At 30, the queue dropped the old pictures'
+			// times, those pictures took the newest ones, and a screen a minute old passed for now (2026-11-12).
+			if len(d.ts) > maxPending {
+				d.ts = d.ts[len(d.ts)-maxPending:]
 			}
 			d.mu.Unlock()
 		}

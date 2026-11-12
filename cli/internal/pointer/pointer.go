@@ -31,6 +31,10 @@ const (
 	// FreshWait: how long a wiggle waits for a frame captured after it. Over BLE, video yields to commands, and a
 	// frame often took over a second: calibration with 1 s saw no pointer (2026-11-06).
 	FreshWait = 3 * time.Second
+	// MoveLag: a frame captured sooner after a nudge may not show it yet. On a still screen the phone sends frames
+	// only once the pointer moves, so the next frame showed it; with a timer counting down on screen frames come
+	// every second, the next one still had the pointer where it was, and Home never found it (2026-11-12).
+	MoveLag = 250 * time.Millisecond
 	// BottomEdge: the home-bar flick presses only with the pointer seen this low (see HomeSwipe).
 	BottomEdge = 0.96
 	// FlickSpeed: mouse units per report for the home-bar flick (see HomeSwipe).
@@ -325,7 +329,7 @@ func (p *Pointer) wiggle(ctx context.Context, nudge int) (after, back image.Imag
 	if err := p.send(ctx, "move %d 0", nudge); err != nil {
 		return nil, nil, err
 	}
-	after = p.screen.Fresh(ctx, sent, FreshWait)
+	after = p.screen.Fresh(ctx, sent.Add(MoveLag), FreshWait)
 	if after != nil {
 		p.screen.Settled(ctx, 150*time.Millisecond, 100*time.Millisecond, 600*time.Millisecond)
 		after = p.screen.Frame()
@@ -334,7 +338,7 @@ func (p *Pointer) wiggle(ctx context.Context, nudge int) (after, back image.Imag
 	if err := p.send(ctx, "move %d 0", -nudge); err != nil {
 		return nil, nil, err
 	}
-	if after != nil && p.screen.Fresh(ctx, sent, FreshWait) != nil {
+	if after != nil && p.screen.Fresh(ctx, sent.Add(MoveLag), FreshWait) != nil {
 		p.screen.Settled(ctx, 150*time.Millisecond, 100*time.Millisecond, 600*time.Millisecond)
 		back = p.screen.Frame()
 	}
@@ -426,7 +430,7 @@ func (p *Pointer) measure(ctx context.Context, x, y float64) (Point, bool, error
 	if err := p.send(ctx, "move %d 0", nudge); err != nil {
 		return Point{}, false, err
 	}
-	after := p.screen.Fresh(ctx, sent, 1200*time.Millisecond)
+	after := p.screen.Fresh(ctx, sent.Add(MoveLag), 1200*time.Millisecond)
 	if after != nil {
 		p.screen.Settled(ctx, 100*time.Millisecond, 50*time.Millisecond, 400*time.Millisecond)
 		after = p.screen.Frame()

@@ -306,6 +306,9 @@ func (c *Conn) learnClock(now time.Time, boardMs uint32, status bool) {
 	// the past, so calibration never saw a frame after its nudges (2026-11-12). A jump that big is a new clock, but
 	// only in a status (its uptime is now): a video chunk's time is when the board got that frame, and a replayed
 	// GOP minutes old reset the clock to it, so its frames passed for fresh (2026-11-12).
+	if c.offset == nil && !status {
+		return // a chunk may be from a GOP minutes old: only a status sets the clock first
+	}
 	if c.offset == nil || off < *c.offset || status && off-*c.offset > 5000 {
 		c.offset = &off
 	}
@@ -372,7 +375,7 @@ func (c *Conn) onFrame(f video.Frame) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.updated = now
-	c.captured = now
+	c.captured = time.Time{} // unknown: such a frame is never taken for the screen now
 	if c.offset != nil && f.TS != 0 {
 		c.captured = time.UnixMilli(int64(f.TS) + *c.offset)
 	}
