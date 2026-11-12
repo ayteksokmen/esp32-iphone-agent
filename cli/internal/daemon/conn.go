@@ -55,7 +55,10 @@ type Conn struct {
 	onApp      func() // the board said the app is using it
 	ptr        *pointer.Pointer
 	lastAction time.Time
-	lastShot   time.Time
+	// inStep: the board time of the last AU the decoder took in order (0: out of step); a new session goes on
+	// right after it (see start).
+	inStep   uint32
+	lastShot time.Time
 
 	keyMu   sync.Mutex // held across the gap and the send of key/type commands
 	lastKey time.Time  // when the board acknowledged the last one
@@ -99,10 +102,9 @@ func (c *Conn) attach(s *proto.Session, via string, l proto.Link) error {
 		c.bleLink = l
 	}
 	c.re = video.NewReassembler()
-	if c.dec != nil { // the new stream starts over from the GOP
-		c.dec.Close()
-		c.dec = nil
-	}
+	// The decoder stays: start() asks the board to go on right after its last AU (`stream on <ts>`). Starting over
+	// from the GOP replayed minutes of old pictures at every Wi-Fi/BLE move, and once the board's GOP had filled up
+	// (frozen) it could not be resent at all: the screen stayed frozen until mirroring restarted (2026-11-12).
 	c.mu.Unlock() // pending commands stay: the board sends their replies on the new session
 	if old != nil && oldVia == "wifi" {
 		old.Close()
@@ -116,7 +118,24 @@ func (c *Conn) attach(s *proto.Session, via string, l proto.Link) error {
 func (c *Conn) start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := c.Send(ctx, "stream on")
+	c.mu.Lock()
+	ts := c.inStep
+	c.mu.Unlock()
+	cmd := "stream on"
+	if ts != 0 {
+		cmd = fmt.Sprintf("stream on %d", ts)
+	}
+	_, err := c.Send(ctx, cmd)
+	if err != nil && ts != 0 && strings.Contains(err.Error(), "usage") { // firmware without resume
+		c.mu.Lock()
+		if c.dec != nil {
+			c.dec.Close()
+			c.dec = nil
+		}
+		c.inStep = 0
+		c.mu.Unlock()
+		_, err = c.Send(ctx, "stream on")
+	}
 	if err == nil && c.rawWanted != nil && c.rawWanted() && c.Via() == "wifi" {
 		c.Send(ctx, "listen raw on") // the board forgets it with every session
 	}
@@ -319,11 +338,16 @@ func (c *Conn) onVideo(chunk []byte, gap bool) {
 	defer c.mu.Unlock()
 	if gap {
 		c.re.Lost()
+		c.inStep = 0
 	}
+	gaps := c.re.Gaps
 	if len(chunk) >= 7 && chunk[2]&video.Start != 0 {
 		c.learnClock(time.Now(), binary.LittleEndian.Uint32(chunk[3:]), false)
 	}
 	au := c.re.Feed(chunk)
+	if c.re.Gaps != gaps { // a chunk went missing: the decoder is out of step until the next IDR
+		c.inStep = 0
+	}
 	if au == nil {
 		return
 	}
@@ -358,6 +382,11 @@ func (c *Conn) onVideo(chunk []byte, gap bool) {
 		c.dec.Close()
 		c.dec = nil
 		c.re.Lost()
+		c.inStep = 0
+		return
+	}
+	if c.dec != nil && au.Flags&(video.Config|video.Snap) == 0 {
+		c.inStep = au.TS
 	}
 }
 

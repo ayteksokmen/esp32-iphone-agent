@@ -193,7 +193,13 @@ String board(const String &line, const String &id, char who) {
   int n = sscanf(arg.c_str(), "%ld %ld", &a, &b);
   if (who == FROM_CLI && !arb_allowed(ARB_CLI, ble_app_active()) && cmd != "crash") return APP_BUSY;
   if (cmd == "stream") {
-    if (arg != "on" && arg != "off") return "err usage: stream on|off";
+    // `stream on <ts>`: the CLI's decoder is in step up to the AU stamped ts; go on right after it (video_resume)
+    if (who == FROM_CLI && arg.startsWith("on ")) {
+      video_resume_cli(strtoul(arg.c_str() + 3, NULL, 10));
+      video_stream(true, who);
+      return "ok";
+    }
+    if (arg != "on" && arg != "off") return "err usage: stream on|off|on <ts>";
     video_stream(arg == "on", who);
     return "ok";
   }

@@ -257,8 +257,26 @@ static bool resumeAt(Sink &s, uint32_t ts) {
 // Continuous mode: send every AU once, catching up from the GOP's IDR when streaming starts (P-frames
 // can't be skipped: each needs the one before, and the next IDR may be minutes away). After a failed
 // send, start over from the GOP's IDR. Past a frozen GOP, go on with the tail.
+static volatile bool cliResumeAsked;
+static volatile uint32_t cliResumeTs;
+
+void video_resume_cli(uint32_t ts) {
+  cliResumeTs = ts;
+  cliResumeAsked = true;
+}
+
 static void streamStep(Sink &s) {
   sendTo(s, owner());
+  // The CLI came back (a new session, or the same one moved between Wi-Fi and BLE) with its decoder in step: go on
+  // from its last AU. A frozen GOP could not be resent, so its screen stayed frozen until mirroring restarted, and
+  // resending a GOP that is not frozen replayed minutes of old pictures first (2026-11-12).
+  if (s.who == FROM_CLI && cliResumeAsked && s.streaming[sideOf(FROM_CLI)]) {
+    cliResumeAsked = false;
+    s.cliGen = cli_gen();
+    bool ok = resumeAt(s, cliResumeTs);
+    if (!ok) s.txGen = UINT32_MAX;
+    board_log("video: cli resume at %lu: %s", (unsigned long)cliResumeTs, ok ? "ok" : "gone, from the IDR");
+  }
   uint8_t *cfg = s.cfg;
   bool wifi = appWifi(s);
   // A new transport, or the app lost chunks it can't get back: resend config + whole GOP. Not again while the
@@ -391,7 +409,10 @@ void video_on_au(const uint8_t *au, size_t len, bool idr) {
   if (sink.task) xTaskNotifyGive(sink.task);
 }
 
-void video_stream(bool on, char who) { sink.streaming[sideOf(who)] = on; }
+void video_stream(bool on, char who) {
+  if (!on && who == FROM_CLI) cliResumeAsked = false;  // a later session asks again with its own place
+  sink.streaming[sideOf(who)] = on;
+}
 
 static void request(const String &id, bool bench, uint32_t kb, char who) {
   Req r = {{0}, kb, bench, who};
