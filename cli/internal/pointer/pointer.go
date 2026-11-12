@@ -712,7 +712,9 @@ func (p *Pointer) frame() image.Image {
 // lags the phone and the Home Screen animation starts late: one look after 1.5 s, and later a 3 s window, missed
 // it and the next fallback ran on top (2026-10-21). So: board capture time >= sent+SettleLag, for up to ChangeWait.
 func (p *Pointer) changedSince(ctx context.Context, before image.Image, sent time.Time) bool {
-	deadline := sent.Add(ChangeWait)
+	// From now, not from sent: the swipe up first finds the pointer on the bottom edge, seconds that used up the
+	// window, and Home from Control Center reached the Home Screen but reported it did not (2026-11-12).
+	deadline := time.Now().Add(ChangeWait)
 	for since := sent.Add(SettleLag); time.Now().Before(deadline); since = later(since, time.Now()) {
 		f := p.screen.Fresh(ctx, since, time.Until(deadline))
 		if f == nil {

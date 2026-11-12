@@ -119,13 +119,9 @@ func (s *Server) recent(ctx context.Context, c *Conn) error {
 		return fmt.Errorf("the iPhone has sent no picture for %.0f s (is its screen locked or off?); wake it and try again",
 			since.Seconds())
 	}
-	if wait(3 * time.Second) {
-		return nil
-	}
-	sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	_, err := c.Send(sctx, "snap")
-	cancel()
-	if err == nil && wait(5*time.Second) {
+	// Only wait: the stream sends every picture in order. A `snap` resends the whole GOP from its IDR, and asked
+	// for at each stale screenshot it started the catch-up over every time: it never got there (2026-11-12).
+	if wait(5 * time.Second) {
 		return nil
 	}
 	captured, _, _, _ := c.times()
