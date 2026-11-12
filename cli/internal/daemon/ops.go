@@ -11,6 +11,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"log"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -144,6 +145,7 @@ func (c *Conn) pointer(dir string) *pointer.Pointer {
 	defer c.mu.Unlock()
 	if c.ptr == nil {
 		c.ptr = pointer.New(device{c}, c, config.CalibrationPath(dir, c.ID))
+		c.ptr.Log = func(m string) { log.Printf("%s: %s", c.ID, m) }
 	}
 	return c.ptr
 }

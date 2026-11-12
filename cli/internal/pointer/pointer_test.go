@@ -20,6 +20,8 @@ type fakeDevice struct {
 	x, y  int
 	fail  map[string]bool
 	moved time.Time
+	// the screen edge in units, as the phone stops the pointer there (0: no edge)
+	maxX, maxY int
 }
 
 func (d *fakeDevice) Links() int { return 1 }
@@ -39,6 +41,9 @@ func (d *fakeDevice) Send(_ context.Context, line string) error {
 		var dx, dy int
 		fmt.Sscanf(arg, "%d %d", &dx, &dy)
 		d.x, d.y = max(0, d.x+dx), max(0, d.y+dy)
+		if d.maxX > 0 {
+			d.x, d.y = min(d.x, d.maxX), min(d.y, d.maxY)
+		}
 	}
 	d.moved = time.Now()
 	return nil
@@ -166,8 +171,11 @@ func TestFixLearnsAnOffset(t *testing.T) {
 	}
 }
 
-// fakeScreen draws the fake device's pointer, with true span 410 x 870 and an offset.
-type fakeScreen struct{ d *fakeDevice }
+// fakeScreen draws the fake device's pointer, with true span 410 x 870 (or w x h) and an offset.
+type fakeScreen struct {
+	d    *fakeDevice
+	w, h float64
+}
 
 func (s *fakeScreen) Live() bool { return true }
 
@@ -175,7 +183,11 @@ func (s *fakeScreen) Frame() image.Image {
 	s.d.mu.Lock()
 	x, y := s.d.x, s.d.y
 	s.d.mu.Unlock()
-	fx, fy := 0.01+float64(x)/410, 0.005+float64(y)/870
+	sw, sh := s.w, s.h
+	if sw == 0 {
+		sw, sh = 410, 870
+	}
+	fx, fy := min(0.01+float64(x)/sw, 0.995), min(0.005+float64(y)/sh, 0.995)
 	return frame(fx*W, fy*H)
 }
 
@@ -187,7 +199,7 @@ func (s *fakeScreen) Fresh(_ context.Context, since time.Time, _ time.Duration) 
 
 func TestCalibrationFindsTheSpanFromTheScreen(t *testing.T) {
 	d := &fakeDevice{}
-	p := newPointer(t, d, &fakeScreen{d})
+	p := newPointer(t, d, &fakeScreen{d: d})
 	if err := p.Calibrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -199,6 +211,31 @@ func TestCalibrationFindsTheSpanFromTheScreen(t *testing.T) {
 	fx, fy := 0.01+float64(d.x)/410, 0.005+float64(d.y)/870
 	if math.Abs(fx-0.5) > 0.01 || math.Abs(fy-0.5) > 0.01 {
 		t.Fatalf("landed at %.3f, %.3f", fx, fy)
+	}
+}
+
+// A fast pointer (Tracking Speed up) crosses the screen in fewer units than the first stop: calibration shortens
+// its stops instead of failing (seen on an iPhone, 2026-11-12).
+func TestCalibrationShortensItsStopsForAFastPointer(t *testing.T) {
+	d := &fakeDevice{maxX: 120, maxY: 260}
+	p := newPointer(t, d, &fakeScreen{d, 120, 260})
+	if err := p.Calibrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(float64(p.Span.W-120)) > 8 || math.Abs(float64(p.Span.H-260)) > 16 {
+		t.Fatalf("span %+v", p.Span)
+	}
+}
+
+// A slow pointer hardly leaves the corner at the first stops: calibration goes further.
+func TestCalibrationLengthensItsStopsForASlowPointer(t *testing.T) {
+	d := &fakeDevice{maxX: 1800, maxY: 4000}
+	p := newPointer(t, d, &fakeScreen{d, 1800, 4000})
+	if err := p.Calibrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(float64(p.Span.W-1800)) > 90 || math.Abs(float64(p.Span.H-4000)) > 200 {
+		t.Fatalf("span %+v", p.Span)
 	}
 }
 

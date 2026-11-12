@@ -31,10 +31,26 @@ const (
 	// FreshWait: how long a wiggle waits for a frame captured after it. Over BLE, video yields to commands, and a
 	// frame often took over a second: calibration with 1 s saw no pointer (2026-11-06).
 	FreshWait = 3 * time.Second
+	// HomeRest: iOS smooths pointer speed over the last reports, so right after `home` (fast reports) the first units
+	// of the next move went several times further: 24 units crossed 31% of the screen, the next 116 only 60%
+	// (2026-11-12). Resting after `home` lets that speed die down; phone.py's home rested 80 ms too.
+	HomeRest = 250 * time.Millisecond
+	// GlideWait: with Pointer Animations on (the iOS default) the pointer glides to a new spot for up to ~1 s, and a
+	// click sent at once was lost: the pointer sat on the Wi-Fi row and nothing opened (2026-11-12). Before pressing,
+	// wait for the picture to settle (or this long without video), so nobody has to turn the animations off.
+	GlideWait = 900 * time.Millisecond
 )
 
-// CalibrationStops are the distances at which calibration finds the pointer.
+// CalibrationStops are the distances at which calibration finds the pointer, at scale 1. How far a mouse unit goes
+// depends on the phone and its Tracking Speed: on one iPhone the first stop already pinned the pointer to the right
+// edge (2026-11-12). So calibration rescales the stops until both land on screen; nobody has to touch the setting.
 var CalibrationStops = []int{150, 350}
+
+const (
+	calibrationTries = 5
+	minStop          = 24 // units; shorter stops measure too little movement to trust
+	maxStop          = 4000
+)
 
 // Device sends one board command; an "err" reply is an error. Links counts (re)connections.
 type Device interface {
@@ -149,53 +165,104 @@ func (p *Pointer) screenAspect() float64 {
 // ErrNotFound: calibration could not see the pointer on screen.
 var ErrNotFound = errors.New("calibration: pointer not found on screen (is the mouse pointer visible, AssistiveTouch on, Screen Mirroring on?)")
 
-// Calibrate finds the pointer on screen at two known distances from the corner and fits the mapping from both.
+// Calibrate finds the pointer on screen at two known distances from the corner and fits the mapping from both. A
+// pointer that runs into the far edge makes it retry with shorter stops, one that barely leaves the corner with
+// longer ones.
 func (p *Pointer) Calibrate(ctx context.Context) error {
+	scale, grew := 1.0, false
+	for try := 0; try < calibrationTries; try++ {
+		stops := make([]int, len(CalibrationStops))
+		for i, u := range CalibrationStops {
+			stops[i] = min(max(int(math.RoundToEven(float64(u)*scale)), minStop*(i+1)), maxStop)
+		}
+		// the nudge shrinks with the stops: a fast pointer moved by the full Nudge shifts too far for Locate's
+		// correction, and the same spot was found at 0.49 and 0.62 (2026-11-12)
+		nudge := max(4, int(math.RoundToEven(Nudge*min(scale, 1))))
+		found, seen, err := p.calibrationRun(ctx, stops, nudge)
+		if err != nil {
+			return err
+		}
+		p.Log(fmt.Sprintf("calibration: stops %v: found %v, then seen %d (1 near edge, 2 far edge)", stops, found, seen))
+		if len(found) == 2 {
+			a, b := found[0], found[1]
+			if b.x > a.x && b.y > a.y {
+				s := Span{int(math.RoundToEven(float64(b.units-a.units) / (b.x - a.x))), int(math.RoundToEven(float64(b.units-a.units) / (b.y - a.y)))}
+				// Two sightings of one spot (a stale frame) give a huge span, and the check move after it then took
+				// the board 20 s: its watchdog reset it (2026-11-06). A real span is a few hundred to a few thousand.
+				if s.W >= 100 && s.H >= 100 && s.W <= 5000 && s.H <= 5000 {
+					return p.setCalibration(s, found)
+				}
+			}
+		}
+		next := scale
+		switch seen {
+		case seenFar: // ran into the right or bottom edge: the pointer is fast, go less far
+			next = scale * 0.4
+		case seenNear: // still in the corner: the pointer is slow, go further
+			next = scale * 2.5
+		case seenNone:
+			// Not seen at all at the first stop: a slow pointer may still be under the status bar, where nothing is
+			// searched. Going further once tells that apart from a pointer that is not there (which costs a run).
+			if len(found) == 0 && !grew {
+				next, grew = scale*4, true
+			}
+		}
+		if next == scale || stops[0] == minStop && next < scale || stops[len(stops)-1] == maxStop && next > scale {
+			break
+		}
+		p.Log(fmt.Sprintf("calibration: stops %v did not fit the screen, trying again at %.2fx", stops, next))
+		scale = next
+	}
+	return ErrNotFound
+}
+
+type calibrationStop struct {
+	units int
+	x, y  float64
+}
+
+// where findPointer saw the pointer when it was not usable
+const (
+	seenNone = iota
+	seenNear // pinned to the top or left edge
+	seenFar  // pinned to the right or bottom edge
+)
+
+// calibrationRun homes, then moves out to each stop and finds the pointer there. It stops at the first stop where
+// the pointer is not usable, and says where it was seen then.
+func (p *Pointer) calibrationRun(ctx context.Context, stops []int, nudge int) ([]calibrationStop, int, error) {
 	p.pos = nil
-	if err := p.send(ctx, "home"); err != nil {
-		return err
+	if err := p.home(ctx); err != nil {
+		return nil, seenNone, err
 	}
-	type stop struct {
-		units int
-		x, y  float64
-	}
-	var found []stop
-	for _, units := range CalibrationStops {
+	var found []calibrationStop
+	for _, units := range stops {
 		step := units
 		if len(found) > 0 {
 			step = units - found[len(found)-1].units
 		}
 		if err := p.moveXY(ctx, step, step); err != nil {
-			return err
+			return nil, seenNone, err
 		}
 		if p.screen == nil || !p.screen.Live() {
-			break
+			return found, seenNone, nil
 		}
-		pt, ok, err := p.findPointer(ctx)
-		if err == nil && !ok { // once more: a frame lost or a late one
-			pt, ok, err = p.findPointer(ctx)
+		pt, seen, err := p.findPointer(ctx, nudge)
+		if err == nil && pt == nil && seen == seenNone { // once more: a frame lost or a late one
+			pt, seen, err = p.findPointer(ctx, nudge)
 		}
 		if err != nil {
-			return err
+			return nil, seenNone, err
 		}
-		if !ok {
-			break
+		if pt == nil {
+			return found, seen, nil
 		}
-		found = append(found, stop{units, pt.X, pt.Y})
+		found = append(found, calibrationStop{units, pt.X, pt.Y})
 	}
-	if len(found) < 2 {
-		return ErrNotFound
-	}
-	a, b := found[0], found[1]
-	if b.x == a.x || b.y == a.y {
-		return ErrNotFound
-	}
-	s := Span{int(math.RoundToEven(float64(b.units-a.units) / (b.x - a.x))), int(math.RoundToEven(float64(b.units-a.units) / (b.y - a.y)))}
-	// Two sightings of one spot (a stale frame) give a huge span, and the check move after it then took the board
-	// 20 s: its watchdog reset it (2026-11-06). A real span is a few hundred to a few thousand units.
-	if s.W < 100 || s.H < 100 || s.W > 5000 || s.H > 5000 {
-		return ErrNotFound
-	}
+	return found, seenNone, nil
+}
+
+func (p *Pointer) setCalibration(s Span, found []calibrationStop) error {
 	p.Span = &s
 	aspect := p.screenAspect()
 	p.Quality, p.Aspect = nil, &aspect
@@ -204,38 +271,70 @@ func (p *Pointer) Calibrate(ctx context.Context) error {
 		p.remember("x", [2]float64{float64(f.units) / float64(s.W), f.x})
 		p.remember("y", [2]float64{float64(f.units) / float64(s.H), f.y})
 	}
-	p.Log(fmt.Sprintf("calibration: span %d x %d", s.W, s.H))
+	p.Log(fmt.Sprintf("calibration: span %d x %d (stops %d, %d)", s.W, s.H, found[0].units, found[1].units))
 	return p.save()
 }
 
-// findPointer wiggles the pointer and finds it anywhere on screen (the span may still be unknown).
-func (p *Pointer) findPointer(ctx context.Context) (Point, bool, error) {
+const (
+	edgeBand = 0.03 // a pointer this close to the screen edge may be pinned there: its position says nothing
+	// Locate skips the status bar (top 5%), so a pointer just below it is seen only in part, and too low: 0.052 for a
+	// pointer at 0.042 in a test. Such a stop is treated as still in the corner.
+	topBand = 0.08
+)
+
+// findPointer wiggles the pointer and finds it anywhere on screen (the span may still be unknown). It returns nil
+// when the pointer was not seen, or was seen at an edge (and which one).
+func (p *Pointer) findPointer(ctx context.Context, size int) (*Point, int, error) {
 	// iOS glides the pointer to a new spot over ~1 s, and the first frames arrive ~0.2 s late: a shorter wait took
 	// a frame from before the stop's move as "before" (2026-11-06).
 	p.screen.Settled(ctx, 400*time.Millisecond, 800*time.Millisecond, 3*time.Second)
-	before, sent := p.screen.Frame(), time.Now()
-	if err := p.send(ctx, "move %d 0", Nudge); err != nil {
-		return Point{}, false, err
+	before := p.screen.Frame()
+	// A pointer pinned to the right edge cannot move right and would not show up: wiggle it left and back instead.
+	// It shows up then, so calibration knows it went too far rather than that the pointer is missing.
+	for _, nudge := range []int{size, -size} {
+		after, back, err := p.wiggle(ctx, nudge)
+		if err != nil {
+			return nil, seenNone, err
+		}
+		pt, ok := LocateBack(before, after, back, Point{0.5, 0.5}, math.Copysign(0.025, float64(nudge)), Point{0.5, 0.5})
+		p.Log(fmt.Sprintf("calibration: nudge %+d: found %v at %.3f, %.3f (after %v, back %v)", nudge, ok, pt.X, pt.Y, after != nil, back != nil))
+		if !ok {
+			before = p.screen.Frame()
+			continue
+		}
+		switch {
+		case nudge < 0 && pt.X >= 0.8: // it could not move right: pinned to the right edge
+			return nil, seenFar, nil
+		case pt.X >= 1-edgeBand || pt.Y >= 1-edgeBand:
+			return nil, seenFar, nil
+		case pt.X <= edgeBand || pt.Y <= topBand:
+			return nil, seenNear, nil
+		}
+		return &pt, seenNone, nil
 	}
-	after := p.screen.Fresh(ctx, sent, FreshWait)
+	return nil, seenNone, nil
+}
+
+// wiggle moves the pointer by nudge units sideways and back, and returns a frame from each end.
+func (p *Pointer) wiggle(ctx context.Context, nudge int) (after, back image.Image, err error) {
+	sent := time.Now()
+	if err := p.send(ctx, "move %d 0", nudge); err != nil {
+		return nil, nil, err
+	}
+	after = p.screen.Fresh(ctx, sent, FreshWait)
 	if after != nil {
 		p.screen.Settled(ctx, 150*time.Millisecond, 100*time.Millisecond, 600*time.Millisecond)
 		after = p.screen.Frame()
 	}
 	sent = time.Now()
-	if err := p.send(ctx, "move -%d 0", Nudge); err != nil {
-		return Point{}, false, err
+	if err := p.send(ctx, "move %d 0", -nudge); err != nil {
+		return nil, nil, err
 	}
-	var back image.Image
 	if after != nil && p.screen.Fresh(ctx, sent, FreshWait) != nil {
 		p.screen.Settled(ctx, 150*time.Millisecond, 100*time.Millisecond, 600*time.Millisecond)
 		back = p.screen.Frame()
 	}
-	pt, ok := LocateBack(before, after, back, Point{0.5, 0.5}, 0.025, Point{0.5, 0.5})
-	if !ok || pt.X <= 0.03 || pt.X >= 0.97 || pt.Y <= 0.03 || pt.Y >= 0.97 {
-		return Point{}, false, nil
-	}
-	return pt, true, nil
+	return after, back, nil
 }
 
 // FinishCalibration: x, y is where the pointer ended up after `home` + `move 200 200` (one point).
@@ -403,7 +502,7 @@ func (p *Pointer) moveTo(ctx context.Context, tx, ty int, rehome bool) error {
 		p.pos, p.link = nil, l
 	}
 	if p.pos == nil || rehome && p.moves >= RehomeEvery {
-		if err := p.send(ctx, "home"); err != nil {
+		if err := p.home(ctx); err != nil {
 			return err
 		}
 		p.pos, p.moves = &[2]int{0, 0}, 0
@@ -433,13 +532,21 @@ func (p *Pointer) moveXY(ctx context.Context, dx, dy int) error {
 	return nil
 }
 
+// home slams the pointer into the corner and rests (see HomeRest).
+func (p *Pointer) home(ctx context.Context) error {
+	if err := p.send(ctx, "home"); err != nil {
+		return err
+	}
+	return p.Sleep(ctx, HomeRest)
+}
+
 // Reset lets go of the button and re-homes the pointer, whatever state a gesture left.
 func (p *Pointer) Reset(ctx context.Context) error {
 	p.pos = nil
 	if err := p.send(ctx, "release"); err != nil {
 		return err
 	}
-	if err := p.send(ctx, "home"); err != nil {
+	if err := p.home(ctx); err != nil {
 		return err
 	}
 	p.pos, p.moves = &[2]int{0, 0}, 0
@@ -451,6 +558,9 @@ func (p *Pointer) Tap(ctx context.Context, x, y float64, aim bool, count int) er
 	if err := p.Point(ctx, x, y, aim); err != nil {
 		return err
 	}
+	if err := p.glide(ctx); err != nil {
+		return err
+	}
 	for i := 0; i < max(count, 1); i++ {
 		if err := p.send(ctx, "click"); err != nil {
 			return err
@@ -459,9 +569,21 @@ func (p *Pointer) Tap(ctx context.Context, x, y float64, aim bool, count int) er
 	return p.Sleep(ctx, TapGap)
 }
 
+// glide waits until the pointer has stopped where it was sent (see GlideWait).
+func (p *Pointer) glide(ctx context.Context) error {
+	if p.screen != nil && p.screen.Live() {
+		p.screen.Settled(ctx, 250*time.Millisecond, 300*time.Millisecond, GlideWait+300*time.Millisecond)
+		return ctx.Err()
+	}
+	return p.Sleep(ctx, GlideWait)
+}
+
 // LongPress presses at x, y for d without moving.
 func (p *Pointer) LongPress(ctx context.Context, x, y float64, d time.Duration) error {
 	if err := p.Point(ctx, x, y, false); err != nil {
+		return err
+	}
+	if err := p.glide(ctx); err != nil {
 		return err
 	}
 	if err := p.send(ctx, "press"); err != nil {
@@ -482,6 +604,9 @@ func (p *Pointer) Swipe(ctx context.Context, x1, y1, x2, y2 float64, hold bool) 
 // end first, so lists and pickers stop exactly there; system gestures (home, back) need the flick.
 func (p *Pointer) Drag(ctx context.Context, pts []Point, hold bool) error {
 	if err := p.Point(ctx, pts[0].X, pts[0].Y, false); err != nil {
+		return err
+	}
+	if err := p.glide(ctx); err != nil {
 		return err
 	}
 	if err := p.send(ctx, "press"); err != nil {

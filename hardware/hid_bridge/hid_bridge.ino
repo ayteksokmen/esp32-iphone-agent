@@ -33,7 +33,11 @@
 
 const int STEP = 10;      // pointer speed per report while moving (any direction, see pace.h)
 const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
-const int HOME_REPORTS = 25;  // per axis
+// per axis. 25 reports 2 ms apart left the pointer short of the left edge at a slow Tracking Speed (stopped at
+// 14% and 62% of the width on an iPhone, 2026-11-12), and every later move was off by that much. 60 reports 4 ms
+// apart reach the corner at any Tracking Speed, in about half a second.
+const int HOME_REPORTS = 60;
+const int HOME_MS = 4;
 #ifndef DEBUG_SERIAL
 #define DEBUG_SERIAL 0  // 1: echo commands and the AirPlay handshake over USB serial
 #endif
@@ -107,8 +111,12 @@ String run(const String &line) {
   if (!usbReady()) return "err phone usb asleep (unlock the phone)";
   if (cmd == "home") {  // slam the pointer into the top-left corner: left first, then up along the left edge,
     // so it never rides the top edge from the right (that opened Control Center, 2026-11-06)
-    for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(-127, 0); delay(2); }
-    for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(0, -127); delay(2); }
+    for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(-127, 0); delay(HOME_MS); }
+    for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(0, -127); delay(HOME_MS); }
+    // and left once more: the screen's corner is rounded, and going up along the left edge the pointer slid right
+    // along the curve, to 12% of the width (2026-11-12); nothing left of that was reachable. Pushed left again it
+    // slides down the curve onto the left edge, a few percent below the top, where a move right starts clean.
+    for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(-127, 0); delay(HOME_MS); }
     return "ok";
   }
   if (cmd == "move") { movePaced(a, b, constrain(c, 1, 40)); return "ok"; }  // c: speed per report (calibration)

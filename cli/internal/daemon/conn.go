@@ -301,7 +301,10 @@ func (c *Conn) onStatus(b []byte) {
 // learnClock must hold mu.
 func (c *Conn) learnClock(now time.Time, boardMs uint32) {
 	off := now.UnixMilli() - int64(boardMs)
-	if c.offset == nil || off < *c.offset {
+	// The smallest offset is kept (the least link delay), but a board that restarted (unplugged from the Mac and
+	// plugged into the iPhone) counts from 0 again: its offset jumps up by seconds and the old one put every frame in
+	// the past, so calibration never saw a frame after its nudges (2026-11-12). A jump that big is a new clock.
+	if c.offset == nil || off < *c.offset || off-*c.offset > 5000 {
 		c.offset = &off
 	}
 }
