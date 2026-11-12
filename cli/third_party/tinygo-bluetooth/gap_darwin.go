@@ -137,6 +137,9 @@ func (a *Adapter) Connect(address Address, params ConnectionParams) (Device, err
 
 			// check if we have received a disconnected peripheral
 			if p.State() == cbgo.PeripheralStateDisconnected {
+				if connectionError == nil { // esp32agent patch: a zero Device with no error crashed the caller
+					connectionError = errors.New("Connect failed: the peer disconnected")
+				}
 				return Device{}, connectionError
 			}
 

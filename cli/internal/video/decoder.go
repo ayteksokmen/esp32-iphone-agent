@@ -31,6 +31,7 @@ type Decoder struct {
 	ts    []uint32 // board times of AUs in flight, oldest first
 	// Resync when idle (see idle): the last picture out, and the last AU fed, with when.
 	lastImg          image.Image
+	lastRaw          []byte // the last picture out when it was skipped (not decoded yet)
 	lastOut, lastFed time.Time
 	lastFedTS        uint32
 	stderr           bytes.Buffer
@@ -80,11 +81,22 @@ func NewDecoder(ffmpeg string, onFrame func(Frame)) (*Decoder, error) {
 			if err != nil {
 				break
 			}
-			img, err := bmp.Decode(bytes.NewReader(raw))
 			ts := d.popTS()
+			// Catching up (the next picture already on its way): skip turning it into an image, the costly part.
+			// A new stream starts with the whole GOP, minutes of pictures on a still screen, and decoding each took
+			// minutes before the screen now showed (2026-11-12). The last one is always decoded.
+			// The sign is the next picture's bytes already waiting from ffmpeg; the count of times queued is not one
+			// (pictures ffmpeg dropped leave theirs there, and every picture would be skipped).
+			if r.Buffered() > 0 {
+				d.mu.Lock()
+				d.lastRaw, d.lastOut = raw, time.Now() // idle decodes it if it stays the last
+				d.mu.Unlock()
+				continue
+			}
+			img, err := bmp.Decode(bytes.NewReader(raw))
 			if err == nil {
 				d.mu.Lock()
-				d.lastImg, d.lastOut = img, time.Now()
+				d.lastImg, d.lastRaw, d.lastOut = img, nil, time.Now()
 				d.mu.Unlock()
 				onFrame(Frame{Img: img, TS: ts})
 			}
@@ -111,13 +123,23 @@ func (d *Decoder) idle(onFrame func(Frame)) {
 		case <-t.C:
 		}
 		d.mu.Lock()
-		quiet := len(d.queue) == 0 && len(d.ts) > 0 && d.lastImg != nil &&
+		quiet := len(d.queue) == 0 && (len(d.ts) > 0 || d.lastRaw != nil) && (d.lastImg != nil || d.lastRaw != nil) &&
 			time.Since(d.lastFed) > IdleAfter && time.Since(d.lastOut) > IdleAfter
-		img, ts := d.lastImg, d.lastFedTS
+		img, raw, ts := d.lastImg, d.lastRaw, d.lastFedTS
 		if quiet {
-			d.ts = d.ts[:0]
+			d.ts, d.lastRaw = d.ts[:0], nil
 		}
 		d.mu.Unlock()
+		if quiet && raw != nil { // the last picture out was skipped: it is the screen now
+			dec, err := bmp.Decode(bytes.NewReader(raw))
+			if err != nil {
+				continue
+			}
+			img = dec
+			d.mu.Lock()
+			d.lastImg = dec
+			d.mu.Unlock()
+		}
 		if quiet {
 			onFrame(Frame{Img: img, TS: ts})
 		}

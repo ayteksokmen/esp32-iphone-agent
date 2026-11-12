@@ -421,6 +421,12 @@ func (c *Conn) Live() bool {
 	return st["ap"] == "streaming" && c.Frame() != nil
 }
 
+func (c *Conn) lastActionUnset() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastAction.IsZero()
+}
+
 func (c *Conn) Frame() image.Image {
 	c.mu.Lock()
 	defer c.mu.Unlock()

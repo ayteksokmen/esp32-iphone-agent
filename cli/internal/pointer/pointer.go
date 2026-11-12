@@ -85,6 +85,8 @@ type saved struct {
 	Quality *float64               `json:"quality,omitempty"`
 	Aspect  *float64               `json:"aspect,omitempty"`
 	Moves   string                 `json:"moves,omitempty"` // "axis": measured with moveXY's moves; older ones are redone
+	// NoHomeKeys: this phone ignored the Home key and Cmd+H (see GoHome)
+	NoHomeKeys bool `json:"no_home_keys,omitempty"`
 }
 
 // MovesAxis marks a calibration measured with axis-by-axis moves.
@@ -103,8 +105,11 @@ type Pointer struct {
 	seen    map[string][][2]float64
 	Quality *float64 // pointer error at the last check, fraction of the screen
 	Aspect  *float64 // frame width / height when calibrated
-	Log     func(string)
-	Sleep   func(context.Context, time.Duration) error
+	// NoHomeKeys: the Home key and Cmd+H left the screen as it was and the swipe up worked: GoHome goes straight
+	// to the swipe. Each key waited ChangeWait for a change, and Home took 15 s (2026-11-12).
+	NoHomeKeys bool
+	Log        func(string)
+	Sleep      func(context.Context, time.Duration) error
 }
 
 func sleep(ctx context.Context, d time.Duration) error {
@@ -128,7 +133,7 @@ func New(dev Device, screen Screen, file string) *Pointer {
 		return p
 	}
 	p.Span = &Span{s.W, s.H}
-	p.Quality, p.Aspect = s.Quality, s.Aspect
+	p.Quality, p.Aspect, p.NoHomeKeys = s.Quality, s.Aspect, s.NoHomeKeys
 	for _, axis := range []string{"x", "y"} {
 		for _, v := range s.Seen[axis] {
 			if len(v) == 2 {
@@ -359,7 +364,8 @@ func (p *Pointer) save() error {
 	if p.Span == nil || p.file == "" {
 		return nil
 	}
-	s := saved{W: p.Span.W, H: p.Span.H, Seen: map[string][][]float64{}, Quality: p.Quality, Aspect: p.Aspect, Moves: MovesAxis}
+	s := saved{W: p.Span.W, H: p.Span.H, Seen: map[string][][]float64{}, Quality: p.Quality, Aspect: p.Aspect, Moves: MovesAxis,
+		NoHomeKeys: p.NoHomeKeys}
 	for axis, pts := range p.seen {
 		s.Seen[axis] = [][]float64{}
 		for _, v := range pts {
@@ -680,7 +686,11 @@ func (p *Pointer) GoHome(ctx context.Context) error {
 		},
 	}
 	var last error
+	keysIgnored := true // with video: both keys tried, and neither changed the screen
 	for i, try := range tries {
+		if i < 2 && p.NoHomeKeys {
+			continue
+		}
 		before, sent := p.frame(), time.Now()
 		err := try()
 		if err != nil && strings.HasPrefix(err.Error(), "busy") {
@@ -690,7 +700,15 @@ func (p *Pointer) GoHome(ctx context.Context) error {
 			return nil // no video to check against: trust the Home key, and after Cmd+H still flick (as before)
 		}
 		if err == nil && before != nil && p.changedSince(ctx, before, sent) {
+			if i == 2 && keysIgnored && !p.NoHomeKeys {
+				p.NoHomeKeys = true
+				p.Log("home: this phone ignores the Home key and Cmd+H; going straight to the swipe from now on")
+				p.save()
+			}
 			return nil
+		}
+		if i < 2 && (err != nil || before == nil) {
+			keysIgnored = false
 		}
 		last = err
 	}

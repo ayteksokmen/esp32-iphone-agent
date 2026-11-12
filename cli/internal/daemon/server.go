@@ -78,6 +78,7 @@ func (s *Server) Serve(l net.Listener) error {
 		<-s.stop
 		l.Close()
 	}()
+	go s.awake()
 	if s.Idle > 0 {
 		go s.idle()
 	}
@@ -114,12 +115,71 @@ func (s *Server) idle() {
 		case <-time.After(10 * time.Second):
 		}
 		s.mu.Lock()
-		quiet := s.active == 0 && time.Since(s.last) > s.Idle
+		idle := time.Since(s.last)
+		quiet := s.active == 0 && idle > s.Idle
+		conns := make([]*Conn, 0, len(s.conns))
+		for _, c := range s.conns {
+			conns = append(conns, c)
+		}
 		s.mu.Unlock()
+		// Not while the phone mirrors (up to MirrorStay): a new daemon has to take in every picture since the last
+		// keyframe, minutes of them on a still screen, before it shows the screen now (2026-11-12).
+		if quiet && idle < MirrorStay {
+			for _, c := range conns {
+				if st, age := c.Status(); age >= 0 && age < 10*time.Second && st["ap"] == "streaming" {
+					quiet = false
+				}
+			}
+		}
 		if quiet {
 			log.Printf("idle for %v, exiting", s.Idle)
 			s.Stop()
 			return
+		}
+	}
+}
+
+// MirrorStay: how long the daemon stays up without requests while the phone mirrors (see idle).
+const MirrorStay = 2 * time.Hour
+
+// AwakeFor: after the last action on the phone, how long the daemon keeps it from locking (see awake). The lock
+// stops mirroring, and someone has to unlock the phone and start it again: four times in an hour (2026-11-12).
+const AwakeFor = 15 * time.Minute
+
+// awake nudges the pointer by one unit and back now and then while the phone is in use and mirrors: to iOS that
+// is activity, so Auto-Lock does not lock it under the agent. Only with no request running, and long after the
+// last action, so it never lands inside a gesture; a pointer that moves one unit and back is where it was.
+func (s *Server) awake() {
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-time.After(20 * time.Second):
+		}
+		s.mu.Lock()
+		busy := s.active > 0
+		conns := make([]*Conn, 0, len(s.conns))
+		for _, c := range s.conns {
+			conns = append(conns, c)
+		}
+		s.mu.Unlock()
+		if busy {
+			continue
+		}
+		for _, c := range conns {
+			c.mu.Lock()
+			since := time.Since(c.lastAction)
+			c.mu.Unlock()
+			st, age := c.Status()
+			if c.lastActionUnset() || since < 20*time.Second || since > AwakeFor || age < 0 || age > 10*time.Second ||
+				st["ap"] != "streaming" || st["owner"] == "app" {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if _, err := c.Send(ctx, "move 1 0"); err == nil {
+				c.Send(ctx, "move -1 0")
+			}
+			cancel()
 		}
 	}
 }
