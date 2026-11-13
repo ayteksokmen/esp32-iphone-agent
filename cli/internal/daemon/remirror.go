@@ -119,6 +119,9 @@ func (s *Server) remirror(ctx context.Context, c *Conn, force bool) error {
 	if err := p.HomeSwipe(ctx); err != nil {
 		return err
 	}
+	// Let Control Center slide away first: the screenshot right after showed it still open (2026-11-13).
+	c.Fresh(ctx, time.Now().Add(pointer.SettleLag), 2*time.Second)
+	c.Settled(ctx, 400*time.Millisecond, 300*time.Millisecond, 3*time.Second)
 	log.Printf("%s: Screen Mirroring restarted in %.0f s", c.ID, time.Since(started).Seconds())
 	return nil
 }
