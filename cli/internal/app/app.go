@@ -43,6 +43,7 @@ const usage = `esp32agent: see and drive an iPhone through an ESP32 Agent board,
   net join SSID [PASSWORD]         the same, non-interactive
   net hotspot                      the board opens its own hotspot again
   calibrate                        measure the pointer (automatic on the first tap)
+  remirror                         restart Screen Mirroring on the phone (automatic when the video froze)
   listen                           what the iPhone played in the last 30 s, as words (or why it can't be heard)
   listen on|off                    hear the phone's sound while it mirrors (off by default)
   listen mode phone|local          phone: the ESP32 Agent app's words (default); local: whisper.cpp on this
@@ -156,7 +157,7 @@ func (a *App) Run(args []string) int {
 			return a.fail(errors.New("usage: esp32agent skill install"))
 		}
 		return a.skillInstall()
-	case "devices", "pair", "unpair", "calibrate":
+	case "devices", "pair", "unpair", "calibrate", "remirror":
 		if _, err := parse(fs, rest); err != nil {
 			return a.fail(err)
 		}

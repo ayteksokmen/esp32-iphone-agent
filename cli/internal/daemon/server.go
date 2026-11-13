@@ -254,6 +254,11 @@ func (s *Server) Do(ctx context.Context, req Request) Response {
 		return s.screenshot(ctx, c, req)
 	case "calibrate":
 		return s.calibrate(ctx, c)
+	case "remirror": // stop Screen Mirroring and start it again, as after a frozen video
+		if err := s.remirror(ctx, c, true); err != nil {
+			return fail(err)
+		}
+		return ok(map[string]string{"message": "Screen Mirroring restarted"})
 	case "tap", "longpress", "swipe", "text", "keys", "button":
 		return s.io(ctx, c, req)
 	case "send": // debugging: one raw board command; afterwards the pointer position is unknown

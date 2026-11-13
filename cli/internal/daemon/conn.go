@@ -59,6 +59,8 @@ type Conn struct {
 	// right after it (see start).
 	inStep   uint32
 	lastShot time.Time
+	// remirrored: when remirror last ran (see RemirrorEvery)
+	remirrored time.Time
 
 	keyMu   sync.Mutex // held across the gap and the send of key/type commands
 	lastKey time.Time  // when the board acknowledged the last one

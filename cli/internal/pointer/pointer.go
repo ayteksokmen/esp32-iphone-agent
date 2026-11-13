@@ -791,6 +791,34 @@ func (p *Pointer) HomeSwipe(ctx context.Context) error {
 	return err
 }
 
+// ControlCenterSwipe opens Control Center with a drag down from the top-right edge. It needs no picture: the
+// pointer is pushed past the top edge, where iOS clamps it, so the press lands on the edge whatever the estimate.
+// Pressed below the edge the same drag opens Search instead (2026-11-12). The daemon uses it to restart Screen
+// Mirroring when the video froze, when there is no picture to check against.
+func (p *Pointer) ControlCenterSwipe(ctx context.Context) error {
+	if !p.Calibrated() {
+		return ErrNotCalibrated
+	}
+	defer func() { p.pos = nil }() // edge clamping invalidates the tracked position
+	if err := p.Point(ctx, 0.85, 0.1, false); err != nil {
+		return err
+	}
+	if err := p.send(ctx, "move 0 %d", -p.Span.H/4); err != nil { // pin it to the top edge
+		return err
+	}
+	if err := p.Sleep(ctx, GlideWait); err != nil {
+		return err
+	}
+	if err := p.send(ctx, "press"); err != nil {
+		return err
+	}
+	err := p.send(ctx, "move 0 %d", p.Span.H/2)
+	if rerr := p.send(context.WithoutCancel(ctx), "release"); err == nil {
+		err = rerr
+	}
+	return err
+}
+
 func (p *Pointer) dx(x float64) int {
 	return int(math.RoundToEven(math.Min(math.Max(p.Fix(x, "x"), 0), 1) * float64(p.Span.W)))
 }

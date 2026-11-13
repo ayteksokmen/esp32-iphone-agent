@@ -39,10 +39,10 @@ func (s *Server) videoState(ctx context.Context, c *Conn) error {
 			return ctx.Err()
 		}
 	}
-	st, _ := c.Status()
-	if num(st["fz"]) == 1 {
-		return errFrozen
+	if err := s.unfreeze(ctx, c); err != nil {
+		return err
 	}
+	st, _ := c.Status()
 	if st["ap"] != "streaming" {
 		return errMirroring
 	}
