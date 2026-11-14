@@ -154,6 +154,43 @@ func TestHomeSwipePressesOnlyOnTheBottomEdge(t *testing.T) {
 	}
 }
 
+// A picture that lags the phone shows no pointer at first: the flick looks again and presses once it is seen on
+// the edge (2026-11-14), and still presses nothing when it never is.
+func TestHomeSwipeLooksAgainWhenThePictureLags(t *testing.T) {
+	d := &fakeDevice{maxX: 410, maxY: 870}
+	p := newPointer(t, d, &laggyScreen{fakeScreen: fakeScreen{d: d}, stale: 4})
+	p.FinishCalibration(0.5, 0.25)
+	if err := p.HomeSwipe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(d.sent, ","), "press") {
+		t.Fatalf("sent %v", d.sent)
+	}
+
+	d = &fakeDevice{maxX: 410, maxY: 870}
+	p = newPointer(t, d, &laggyScreen{fakeScreen: fakeScreen{d: d}, stale: 1000})
+	p.FinishCalibration(0.5, 0.25)
+	if err := p.HomeSwipe(context.Background()); err == nil || strings.Contains(strings.Join(d.sent, ","), "press") {
+		t.Fatalf("err %v sent %v", err, d.sent)
+	}
+}
+
+// laggyScreen shows no pointer in its first `stale` frames, like a picture still catching up with the phone.
+type laggyScreen struct {
+	fakeScreen
+	stale int
+}
+
+func (s *laggyScreen) Frame() image.Image {
+	if s.stale > 0 {
+		s.stale--
+		return frame(-100, -100)
+	}
+	return s.fakeScreen.Frame()
+}
+
+func (s *laggyScreen) Fresh(context.Context, time.Time, time.Duration) image.Image { return s.Frame() }
+
 func TestGoHomeFallsBackWithoutTheHomeKey(t *testing.T) {
 	d := &fakeDevice{fail: map[string]bool{"homescreen": true}}
 	p := newPointer(t, d, nil)
@@ -318,5 +355,42 @@ func TestPointerFarFromTheTargetIsFoundWithAFullScreenSearch(t *testing.T) {
 	pt, ok := Locate(before, after, Point{0.5, 0.5}, 12/W, Point{0.5, 0.5})
 	if !ok || math.Abs(pt.X*W-354) > 3 || math.Abs(pt.Y*H-136) > 3 {
 		t.Fatalf("found %v %+v", ok, pt)
+	}
+}
+
+// grayFrame: a gray background (lum `bg`), the pointer a disc `lift` brighter at px, py, and a soft cloud band
+// `cloud` brighter from y cy down.
+func grayFrame(px, py float64, bg, lift, cloud uint8, cy int) image.Image {
+	img := image.NewRGBA(image.Rect(0, 0, int(W), int(H)))
+	for y := 0; y < int(H); y++ {
+		for x := 0; x < int(W); x++ {
+			l := bg
+			if y >= cy {
+				l += cloud
+			}
+			if (float64(x)-px)*(float64(x)-px)+(float64(y)-py)*(float64(y)-py) <= 12.5*12.5 {
+				l += lift
+			}
+			img.SetRGBA(x, y, color.RGBA{l, l, l, 255})
+		}
+	}
+	return img
+}
+
+// Over Weather's gray clouds the see-through pointer is only ~25 levels brighter than the background, and only its
+// top half shows on the bottom edge: Locate misses it, LocateFaint near the edge finds it (2026-11-14). A cloud
+// drifting by changes a wide band, which is not taken for the pointer.
+func TestFaintPointerOnTheBottomEdge(t *testing.T) {
+	before, after := grayFrame(249, H-2, 110, 22, 0, 0), grayFrame(261, H-2, 110, 22, 0, 0)
+	if _, ok := Locate(before, after, Point{0.5, 1}, 12/W, Point{0.12, 0.08}); ok {
+		t.Fatal("Locate found a faint pointer; this test no longer shows the case")
+	}
+	pt, ok := LocateFaint(before, after, Point{0.5, 1}, 12/W, Point{0.12, 0.08}, FaintChange)
+	if !ok || math.Abs(pt.X*W-249) > 4 || pt.Y < BottomEdge {
+		t.Fatalf("faint: %v at (%.0f, %.3f)", ok, pt.X*W, pt.Y)
+	}
+	cloud := grayFrame(249, H-2, 110, 0, 18, int(H)-60) // no pointer, a cloud moving into the bottom
+	if pt, ok := LocateFaint(grayFrame(249, H-2, 110, 0, 0, 0), cloud, Point{0.5, 1}, 12/W, Point{0.12, 0.08}, FaintChange); ok {
+		t.Fatalf("took a cloud for the pointer at (%.0f, %.3f)", pt.X*W, pt.Y)
 	}
 }

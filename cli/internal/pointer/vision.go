@@ -47,6 +47,17 @@ func Locate(before, after image.Image, near Point, shift float64, reach Point) (
 // changed there and back count, so a clock's second hand or an animation elsewhere is not taken for the pointer
 // (2026-11-06: the Clock icon next to the calibration stop). back nil: as Locate.
 func LocateBack(before, after, back image.Image, near Point, shift float64, reach Point) (Point, bool) {
+	return locate(before, after, back, near, shift, reach, 30)
+}
+
+// LocateFaint is Locate for a pointer that hardly stands out: it counts changes from `faint` up (Locate needs 30).
+// The pointer is a see-through gray disc, and over a gray background, like Weather's clouds, it is only about 25
+// levels apart from it (2026-11-14). Only for a small `reach`, where a cloud drifting by is not taken for it.
+func LocateFaint(before, after image.Image, near Point, shift float64, reach Point, faint int) (Point, bool) {
+	return locate(before, after, nil, near, shift, reach, faint)
+}
+
+func locate(before, after, back image.Image, near Point, shift float64, reach Point, least int) (Point, bool) {
 	if before == nil || after == nil || before.Bounds().Size() != after.Bounds().Size() {
 		return Point{}, false
 	}
@@ -71,14 +82,14 @@ func LocateBack(before, after, back image.Image, near Point, shift float64, reac
 	for y := top; y < bottom; y++ {
 		for x := left; x < right; x++ {
 			i := y*w + x
-			if d := int(a.Px[i]) - int(b.Px[i]); d <= 30 && d >= -30 {
+			if d := int(a.Px[i]) - int(b.Px[i]); d <= least && d >= -least {
 				continue
 			}
 			if c != nil {
-				if d := int(c.Px[i]) - int(b.Px[i]); d <= 30 && d >= -30 {
+				if d := int(c.Px[i]) - int(b.Px[i]); d <= least && d >= -least {
 					continue // not moved back
 				}
-				if d := int(c.Px[i]) - int(a.Px[i]); d > 30 || d < -30 {
+				if d := int(c.Px[i]) - int(a.Px[i]); d > least || d < -least {
 					continue // changed on its own
 				}
 			}

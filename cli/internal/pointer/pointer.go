@@ -37,6 +37,13 @@ const (
 	MoveLag = 250 * time.Millisecond
 	// BottomEdge: the home-bar flick presses only with the pointer seen this low (see HomeSwipe).
 	BottomEdge = 0.96
+	// EdgeTries, EdgeRetryWait: how often the home-bar flick looks for the pointer on the bottom edge, and the pause
+	// between looks, for a picture that lags behind the phone (see HomeSwipe).
+	// FaintChange: the least change counted as the pointer near where it is expected, when it is not found at all
+	// otherwise (see LocateFaint).
+	FaintChange   = 12
+	EdgeTries     = 3
+	EdgeRetryWait = time.Second
 	// FlickSpeed: mouse units per report for the home-bar flick (see HomeSwipe).
 	FlickSpeed = 40
 	// HomeRest: iOS smooths pointer speed over the last reports, so right after `home` (fast reports) the first units
@@ -448,7 +455,10 @@ func (p *Pointer) measure(ctx context.Context, x, y float64) (Point, bool, error
 	if pt, ok := Locate(before, after, Point{x, y}, shift, Point{0.12, 0.08}); ok {
 		return pt, true, nil
 	}
-	pt, ok := Locate(before, after, Point{0.5, 0.5}, shift, Point{0.5, 0.5})
+	if pt, ok := Locate(before, after, Point{0.5, 0.5}, shift, Point{0.5, 0.5}); ok {
+		return pt, true, nil
+	}
+	pt, ok := LocateFaint(before, after, Point{x, y}, shift, Point{0.12, 0.08}, FaintChange) // over a gray background
 	return pt, ok, nil
 }
 
@@ -770,13 +780,30 @@ func (p *Pointer) HomeSwipe(ctx context.Context) error {
 		return err
 	}
 	if p.screen != nil && p.screen.Live() {
-		pt, ok, err := p.measure(ctx, 0.5, 1)
-		if err != nil {
-			return err
-		}
-		p.Log(fmt.Sprintf("home swipe: pointer found %v at %.3f, %.3f", ok, pt.X, pt.Y))
-		if !ok || pt.Y < BottomEdge || math.Abs(pt.X-0.5) > 0.2 {
-			return errors.New("did not swipe up: the pointer was not on the bottom edge, and a press elsewhere would tap the screen")
+		// Not seen: look again before giving up. The picture can lag the phone by a second or more, and then the
+		// frames measured still show the pointer on its way down: on 2026-11-14 HOME from Weather was refused twice
+		// with the pointer on the edge, and worked on every later try. Nothing is pressed while it is not seen.
+		for try := 1; ; try++ {
+			pt, ok, err := p.measure(ctx, 0.5, 1)
+			if err != nil {
+				return err
+			}
+			p.Log(fmt.Sprintf("home swipe: pointer found %v at %.3f, %.3f (try %d)", ok, pt.X, pt.Y, try))
+			if ok && pt.Y >= BottomEdge && math.Abs(pt.X-0.5) <= 0.2 {
+				break
+			}
+			if try == EdgeTries {
+				return errors.New("did not swipe up: the pointer was not on the bottom edge, and a press elsewhere would tap the screen")
+			}
+			if err := p.Sleep(ctx, EdgeRetryWait); err != nil {
+				return err
+			}
+			if err := p.send(ctx, "move 0 %d", p.Span.H/2); err != nil { // pinned again, in case it was not yet
+				return err
+			}
+			if err := p.glide(ctx); err != nil {
+				return err
+			}
 		}
 	}
 	if err := p.send(ctx, "press"); err != nil {
