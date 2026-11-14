@@ -44,6 +44,7 @@ const usage = `esp32agent: see and drive an iPhone through an ESP32 Agent board,
   net hotspot                      the board opens its own hotspot again
   calibrate                        measure the pointer (automatic on the first tap)
   remirror                         restart Screen Mirroring on the phone (automatic when the video froze)
+  face happy|ask|sad|neutral [S]   a feeling on the board's face (boards with a screen), for S seconds
   listen                           what the iPhone played in the last 30 s, as words (or why it can't be heard)
   listen on|off                    hear the phone's sound while it mirrors (off by default)
   listen mode phone|local          phone: the ESP32 Agent app's words (default); local: whisper.cpp on this
@@ -162,6 +163,15 @@ func (a *App) Run(args []string) int {
 			return a.fail(err)
 		}
 		return a.call(daemon.Request{Cmd: cmd, Device: *dev})
+	case "face":
+		pos, err := parse(fs, rest)
+		if err != nil {
+			return a.fail(err)
+		}
+		if len(pos) == 0 {
+			return a.fail(errors.New("usage: esp32agent face happy|ask|sad|neutral [SECONDS]"))
+		}
+		return a.call(daemon.Request{Cmd: "face", Device: *dev, Text: strings.Join(pos, " ")})
 	case "device":
 		pos, err := parse(fs, rest)
 		if err != nil {

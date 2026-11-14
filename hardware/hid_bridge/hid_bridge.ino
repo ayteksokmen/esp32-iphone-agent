@@ -110,6 +110,8 @@ String run(const String &line) {
   if (cmd == "ping") return "ok";
   if (cmd == "pace") return "ok " + String(PACE_VERSION);  // how moves are paced: the app recalibrates on a change
   if (!usbReady()) return "err phone usb asleep (unlock the phone)";
+  if (cmd == "click") screen_tap();  // the face: focused while the phone is driven, a squeeze on each click
+  else screen_active();
   if (cmd == "home") {  // slam the pointer into the top-left corner: left first, then up along the left edge,
     // so it never rides the top edge from the right (that opened Control Center, 2026-11-06)
     for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(-127, 0); delay(HOME_MS); }
@@ -249,6 +251,19 @@ String board(const String &line, const String &id, char who) {
     if (n < 2) return "err usage: look x y (0-1000)";
     screen_look(constrain(a, 0, 1000) / 1000.f, constrain(b, 0, 1000) / 1000.f);
     return "ok";
+  }
+  if (cmd == "face") {  // a feeling on the face for a while: face happy|ask|sad|neutral|sleep [seconds]
+    static const char *const names[] = {"neutral", "work", "think", "happy", "ask", "sad", "sleep"};
+    char name[12] = "";
+    long secs = -1;
+    sscanf(arg.c_str(), "%11s %ld", name, &secs);
+    for (int m = 0; m < 7; m++) {
+      if (strcmp(name, names[m])) continue;
+      static const long dflt[] = {0, 0, 0, 4, 120, 5, 0};  // ask waits for the user's answer
+      screen_face((Mood)m, (secs >= 0 ? secs : dflt[m]) * 1000);
+      return "ok";
+    }
+    return "err usage: face neutral|work|think|happy|ask|sad|sleep [seconds]";
   }
   if (cmd == "logs") return board_log_page(arg);  // the RAM log, a page at a time (logbuf.h)
   if (cmd == "vdbg") return "ok " + video_debug();  // why a frozen screen stays frozen (video_link.cpp)

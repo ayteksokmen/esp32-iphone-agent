@@ -59,6 +59,10 @@ var (
 			schema([]string{"key"}, map[string]any{"key": map[string]any{"type": "string"}})},
 		{"press_button", "Press a hardware button. Only HOME (go to the Home Screen).",
 			schema([]string{"button"}, map[string]any{"button": map[string]any{"type": "string", "enum": []string{"HOME"}}})},
+		{"face", "Show a feeling on the board's face (boards with a screen): ask while you wait for the user to answer a " +
+			"question, happy when the task is done, sad when it failed, neutral to go back. Taps and typing set the face by " +
+			"themselves.",
+			schema([]string{"mood"}, map[string]any{"mood": map[string]any{"type": "string", "enum": []string{"happy", "ask", "sad", "neutral"}}})},
 		{"device_info", "Board status: mirroring (ap), video frozen (fz), app busy (busy), USB, BLE link.", schema(nil, map[string]any{})},
 		{"phone_audio", "What the iPhone played in the last 30 s (a video, a call, an app's voice) as words, or why it can't be heard " +
 			"(listening off, the app not sharing, no Wi-Fi). The words can be partial or misheard.", schema(nil, map[string]any{})},
@@ -168,6 +172,8 @@ func (a *App) callTool(name string, args map[string]any) map[string]any {
 		req.Cmd, req.Text = "keys", s("key")
 	case "press_button":
 		req.Cmd, req.Text = "button", s("button")
+	case "face":
+		req.Cmd, req.Text = "face", s("mood")
 	case "device_info":
 		req.Cmd = "info"
 	case "phone_audio":

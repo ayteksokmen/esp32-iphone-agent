@@ -24,3 +24,9 @@ bool screen_begin();                    // false when the panel did not come up
 void screen_show(const ScreenInfo &s);  // redraws the state lines that changed
 void screen_tick();                     // moves the eyes on; call it often (loop)
 void screen_look(float x, float y);     // look at this point of the phone's screen (fractions, 0-1)
+
+// What the face shows. Work, think and sleep follow what the board does; the rest come from `face`.
+enum Mood { MOOD_NEUTRAL, MOOD_WORK, MOOD_THINK, MOOD_HAPPY, MOOD_ASK, MOOD_SAD, MOOD_SLEEP };
+void screen_active();                     // a command for the phone came: focused, awake
+void screen_tap();                        // a click: the eyes squeeze a little
+void screen_face(Mood m, uint32_t forMs);  // show m for forMs (0: until the next command for the phone)

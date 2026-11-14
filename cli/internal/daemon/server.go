@@ -270,6 +270,21 @@ func (s *Server) Do(ctx context.Context, req Request) Response {
 			return fail(err)
 		}
 		return ok(map[string]string{"reply": reply})
+	case "face": // a feeling on the board's face (boards with a screen, firmware 0.2.5 and later)
+		mood, secs, _ := strings.Cut(strings.TrimSpace(req.Text), " ")
+		switch mood {
+		case "happy", "ask", "sad", "neutral":
+		default:
+			return fail(fmt.Errorf("face %q not known (happy, ask, sad, neutral)", mood))
+		}
+		line := "face " + mood
+		if secs != "" {
+			line += " " + secs
+		}
+		if _, err := c.Send(ctx, line); err != nil {
+			return fail(fmt.Errorf("the board did not show it (a board without a screen, or firmware before 0.2.5): %w", err))
+		}
+		return ok(map[string]string{"message": "showing " + mood})
 	case "boardlog":
 		return s.boardLog(ctx, c)
 	case "net":
