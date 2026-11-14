@@ -22,6 +22,7 @@ type fakeDevice struct {
 	moved time.Time
 	// the screen edge in units, as the phone stops the pointer there (0: no edge)
 	maxX, maxY int
+	looks      []string
 }
 
 func (d *fakeDevice) Links() int { return 1 }
@@ -29,8 +30,12 @@ func (d *fakeDevice) Links() int { return 1 }
 func (d *fakeDevice) Send(_ context.Context, line string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.sent = append(d.sent, line)
 	cmd, arg, _ := strings.Cut(line, " ")
+	if cmd == "look" { // the face's eyes: kept apart from the pointer's commands
+		d.looks = append(d.looks, line)
+		return nil
+	}
+	d.sent = append(d.sent, line)
 	if d.fail[cmd] {
 		return fmt.Errorf("err unknown command")
 	}
@@ -392,5 +397,19 @@ func TestFaintPointerOnTheBottomEdge(t *testing.T) {
 	cloud := grayFrame(249, H-2, 110, 0, 18, int(H)-60) // no pointer, a cloud moving into the bottom
 	if pt, ok := LocateFaint(grayFrame(249, H-2, 110, 0, 0, 0), cloud, Point{0.5, 1}, 12/W, Point{0.12, 0.08}, FaintChange); ok {
 		t.Fatalf("took a cloud for the pointer at (%.0f, %.3f)", pt.X*W, pt.Y)
+	}
+}
+
+func TestEyesLookWhereThePointerGoes(t *testing.T) {
+	d := &fakeDevice{}
+	p := newPointer(t, d, nil)
+	p.FinishCalibration(0.5, 0.25)
+	for _, pt := range []Point{{0.25, 0.75}, {0.25, 0.75}, {1, 0}} {
+		if err := p.Point(context.Background(), pt.X, pt.Y, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := []string{"look 250 750", "look 1000 0"}; fmt.Sprint(d.looks) != fmt.Sprint(want) {
+		t.Fatalf("looks %v, want %v (once per new place)", d.looks, want)
 	}
 }

@@ -1,6 +1,9 @@
-// Status screen for boards with a built-in display. Only the Waveshare ESP32-S3-Touch-AMOLED-2.16
+// The face on boards with a built-in display. Only the Waveshare ESP32-S3-Touch-AMOLED-2.16
 // (480x480 CO5300 over QSPI) for now; build with `flash.sh --amoled216` (-DBOARD_AMOLED_216=1).
 // Other builds compile none of this.
+//
+// Two robot eyes fill the middle of the screen: they blink, look around when nothing happens, and turn to where the
+// agent is working on the phone (`look x y`). A dim line on top and dots at the bottom show the board's state.
 #pragma once
 #include <Arduino.h>
 
@@ -18,4 +21,6 @@ struct ScreenInfo {
 };
 
 bool screen_begin();                    // false when the panel did not come up
-void screen_show(const ScreenInfo &s);  // redraws only the lines that changed
+void screen_show(const ScreenInfo &s);  // redraws the state lines that changed
+void screen_tick();                     // moves the eyes on; call it often (loop)
+void screen_look(float x, float y);     // look at this point of the phone's screen (fractions, 0-1)

@@ -115,6 +115,7 @@ type Pointer struct {
 	// NoHomeKeys: the Home key and Cmd+H left the screen as it was and the swipe up worked: GoHome goes straight
 	// to the swipe. Each key waited ChangeWait for a change, and Home took 15 s (2026-11-12).
 	NoHomeKeys bool
+	looked     string // the last look sent to the board's face
 	Log        func(string)
 	Sleep      func(context.Context, time.Duration) error
 }
@@ -390,6 +391,12 @@ var ErrNotCalibrated = errors.New("pointer not calibrated")
 func (p *Pointer) Point(ctx context.Context, x, y float64, aim bool) error {
 	if !p.Calibrated() {
 		return ErrNotCalibrated
+	}
+	// The face on a board with a screen turns its eyes there first. Only a show: a board without one, or firmware
+	// from before 0.2.5, answers with an error, which changes nothing here.
+	if look := fmt.Sprintf("look %d %d", int(math.Round(x*1000)), int(math.Round(y*1000))); look != p.looked {
+		p.looked = look
+		_ = p.dev.Send(ctx, look)
 	}
 	if err := p.moveTo(ctx, p.dx(x), p.dy(y), true); err != nil {
 		return err

@@ -30,6 +30,7 @@
 #include "src/heard/heard.h"
 #include "src/cli/cli_proto.h"
 #include "logbuf.h"
+#include "status_screen.h"
 
 const int STEP = 10;      // pointer speed per report while moving (any direction, see pace.h)
 const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
@@ -244,6 +245,11 @@ String board(const String &line, const String &id, char who) {
     cli_audio(arg == "raw on");
     return "ok";
   }
+  if (cmd == "look") {  // the face's eyes turn to this point of the phone's screen (0-1000 each way)
+    if (n < 2) return "err usage: look x y (0-1000)";
+    screen_look(constrain(a, 0, 1000) / 1000.f, constrain(b, 0, 1000) / 1000.f);
+    return "ok";
+  }
   if (cmd == "logs") return board_log_page(arg);  // the RAM log, a page at a time (logbuf.h)
   if (cmd == "vdbg") return "ok " + video_debug();  // why a frozen screen stays frozen (video_link.cpp)
   if (cmd == "crash") return String("ok rst ") + resetReason() + ", last dump: " + lastCrash;
@@ -383,7 +389,6 @@ void startAirplay() {
 }
 
 #if BOARD_AMOLED_216
-#include "status_screen.h"
 // Built-in display (flash.sh --amoled216): what the board is doing, so a test needs no serial monitor.
 // Drawn from loop(), not from a task of its own: internal RAM is tight, and the AirPlay mirror task needs
 // an 8 KB block when mirroring starts (a 6 KB screen task stack left the largest block at 8180 bytes and
@@ -453,6 +458,7 @@ void loop() {
   net_poll();
 #if BOARD_AMOLED_216
   screenPoll();
+  screen_tick();
 #endif
   bool cli = cli_slot() >= 0;
   // A gesture cut off mid-way must not leave the button held (long press); only the side that went holds it.
