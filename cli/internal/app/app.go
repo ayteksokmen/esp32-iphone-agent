@@ -229,6 +229,7 @@ func (a *App) io(fs *flag.FlagSet, dev *string, args []string) int {
 	shot := fs.String("screenshot", "", "also save the screen after the action here (file, or directory/)")
 	format := fs.String("format", "png", "with --screenshot: png or jpeg")
 	maxSize := fs.Int("max-size", 0, "with --screenshot: max(width, height) in pixels")
+	keyboard := fs.String("keyboard", "", "text: the phone's keyboard layout, us or tr (Turkish Q); remembered for the board")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return a.fail(err)
@@ -238,7 +239,7 @@ func (a *App) io(fs *flag.FlagSet, dev *string, args []string) int {
 	}
 	sub, arg := pos[0], strings.Join(pos[1:], " ")
 	req := daemon.Request{Cmd: sub, Device: *dev, Aim: *aim, Ms: *ms, Count: *count, Text: arg, Shot: *shot != "",
-		Format: strings.Replace(*format, "jpg", "jpeg", 1), MaxSize: *maxSize}
+		Format: strings.Replace(*format, "jpg", "jpeg", 1), MaxSize: *maxSize, Keyboard: *keyboard}
 	switch sub {
 	case "tap", "longpress", "swipe":
 		n := 2

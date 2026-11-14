@@ -145,6 +145,7 @@ func (c *Config) Forget(id string) error {
 	delete(c.Boards, id)
 	c.mu.Unlock()
 	os.Remove(CalibrationPath(filepath.Dir(c.path), id))
+	os.Remove(KeyboardPath(filepath.Dir(c.path), id))
 	return c.Save()
 }
 
@@ -160,6 +161,11 @@ func (c *Config) Match(sel string) []string {
 		}
 	}
 	return out
+}
+
+// KeyboardPath is where the phone's keyboard layout for a board's typing is kept (see pointer.ForKeyboard).
+func KeyboardPath(dir, boardID string) string {
+	return filepath.Join(dir, "keyboard-"+boardID)
 }
 
 // CalibrationPath is where a board's pointer calibration lives.

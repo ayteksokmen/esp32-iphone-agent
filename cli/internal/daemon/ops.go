@@ -12,6 +12,7 @@ import (
 	"image/png"
 	"io"
 	"log"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -240,16 +241,44 @@ func (s *Server) calibrate(ctx context.Context, c *Conn) Response {
 	return ok(out)
 }
 
+// keyboard is the phone's keyboard layout for this board's typing: set (and remembered) when given, else the one
+// remembered, else US.
+func (s *Server) keyboard(c *Conn, set string) (string, error) {
+	path := config.KeyboardPath(s.Dir, c.ID)
+	set = strings.ToLower(strings.TrimSpace(set))
+	if set != "" {
+		if err := pointer.ValidKeyboard(set); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(path, []byte(set), 0o600); err != nil {
+			log.Printf("%s: keyboard not saved: %v", c.ID, err)
+		}
+		return set, nil
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		if l := strings.TrimSpace(string(raw)); pointer.ValidKeyboard(l) == nil && l != "" {
+			return l, nil
+		}
+	}
+	return pointer.KeyboardUS, nil
+}
+
 // textChunk keeps one `type` line well inside a single BLE write.
 const textChunk = 160
 
 func (s *Server) io(ctx context.Context, c *Conn, req Request) Response {
 	p := c.pointer(s.Dir)
+	leftOut := "" // text: characters the phone's keyboard has on no key
 	err := func() error {
 		switch req.Cmd {
 		case "text":
-			typed, err := "", error(nil)
-			for rest := pointer.Typeable(req.Text); rest != "" && err == nil; {
+			layout, err := s.keyboard(c, req.Keyboard)
+			if err != nil {
+				return err
+			}
+			text, missing := pointer.ForKeyboard(req.Text, layout)
+			typed := ""
+			for rest := pointer.Typeable(text); rest != "" && err == nil; {
 				n := min(len(rest), textChunk)
 				for n > 0 && !utf8.RuneStart(rest[n-1]) {
 					n--
@@ -259,6 +288,9 @@ func (s *Server) io(ctx context.Context, c *Conn, req Request) Response {
 			}
 			if typed == "" && err == nil {
 				err = errors.New("nothing typeable in that text (the board types ASCII only)")
+			}
+			if len(missing) > 0 {
+				leftOut = fmt.Sprintf("left out %q: no key types it on the %s keyboard (tap it on the on-screen keyboard)", string(missing), layout)
 			}
 			return err
 		case "keys":
@@ -318,6 +350,9 @@ func (s *Server) io(ctx context.Context, c *Conn, req Request) Response {
 	if req.Cmd == "text" && pointer.HasHan(req.Text) {
 		out["typed_as"] = pointer.Typeable(req.Text)
 		out["note"] = "needs the iPhone's Chinese (pinyin) keyboard; if letters appear, tap the globe key and type again"
+	}
+	if leftOut != "" {
+		out["left_out"] = leftOut
 	}
 	if req.Shot { // the action went through either way: a failed screen is reported, not an error
 		if shot, err := s.shot(ctx, c, req); err != nil {

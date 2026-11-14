@@ -50,8 +50,11 @@ var (
 			"duration_ms": map[string]any{"type": "integer", "description": "default 1000"}})},
 		{"swipe", "Swipe from x1, y1 to x2, y2 (rests at the end, so lists stop there).", schema([]string{"x1", "y1", "x2", "y2"},
 			map[string]any{"x1": numProp, "y1": numProp, "x2": numProp, "y2": numProp})},
-		{"type_text", "Type text into the focused field. ASCII only: Chinese is typed as pinyin (then commit a candidate with press_key space or a tap).",
-			schema([]string{"text"}, map[string]any{"text": map[string]any{"type": "string"}})},
+		{"type_text", "Type text into the focused field. Chinese is typed as pinyin (then commit a candidate with press_key space or a tap). " +
+			"Set keyboard to the phone's keyboard layout when it is not US: tr when the on-screen keyboard is Turkish Q (it has ı, ğ, ü, ş keys), " +
+			"else Turkish letters and punctuation come out wrong (i as ı). Remembered for the board, so give it once.",
+			schema([]string{"text"}, map[string]any{"text": map[string]any{"type": "string"},
+				"keyboard": map[string]any{"type": "string", "enum": []string{"us", "tr"}}})},
 		{"press_key", "Press a key or combo: enter, esc, tab, backspace, space, up, down, left, right, cmd+a, shift+tab ...",
 			schema([]string{"key"}, map[string]any{"key": map[string]any{"type": "string"}})},
 		{"press_button", "Press a hardware button. Only HOME (go to the Home Screen).",
@@ -160,7 +163,7 @@ func (a *App) callTool(name string, args map[string]any) map[string]any {
 	case "swipe":
 		req.Cmd, req.Pts = "swipe", []float64{f("x1"), f("y1"), f("x2"), f("y2")}
 	case "type_text":
-		req.Cmd, req.Text = "text", s("text")
+		req.Cmd, req.Text, req.Keyboard = "text", s("text"), s("keyboard")
 	case "press_key":
 		req.Cmd, req.Text = "keys", s("key")
 	case "press_button":
