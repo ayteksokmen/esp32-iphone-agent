@@ -116,6 +116,18 @@ the session moves there and BLE stays connected as the way back.
   the same network). The CLI's status has `link`: `{"via":"ble"|"wifi","mtu":…,"kbps":…}` for its own link.
 - `ESP32AGENT_TRANSPORT=ble` (or `esp32agent net via ble`) keeps the session on BLE.
 
+## Firmware update
+`esp32agent update FILE` puts a firmware image on the board over Wi-Fi, so a board plugged into the iPhone needs
+no USB cable to the computer.
+- **`ota`** (CLI only): `ok <token>`, 32 hex characters, good for one update within 2 minutes; asking again
+  replaces it. It is never the app's video token (`vtok`), which only the app gets. `err an update is already
+  running`; `err this build has no OTA (--lean)`; while the app's link is up, `err busy: …` as every command.
+- **The image** goes to the board's update server, TCP 7300, as the app's (`hardware/hid_bridge/ota.h`):
+  `ota <token> <size> <md5>\n`, `ok\n`, the image, then `done\n` (the board reboots into it) or `err <why>\n`
+  (the old image stays). The computer has to reach the board's IP, as for the Wi-Fi link.
+- The CLI then waits for a status from the new boot (`up` shorter than the time since the update began) and
+  reports its `fw`. A new image that doesn't come up rolls back to the old one (`ota_confirm`).
+
 ## Sharing the phone with the app
 One side drives the phone at a time, and the app wins (`hardware/hid_bridge/src/hid/arbiter.h`). The app runs
 unchanged and never sees a new error.

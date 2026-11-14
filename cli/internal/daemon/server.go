@@ -60,8 +60,9 @@ type Server struct {
 	Version   string
 	Idle      time.Duration // exit after this long without requests (0 = never)
 	ScanTime  time.Duration
-	DialWiFi  func(ctx context.Context, ip string) (proto.Link, error) // the board's Wi-Fi link; nil: ble.DialWiFi
-	WiFiCheck time.Duration                                            // how often to try it (0: 2 s)
+	DialWiFi  func(ctx context.Context, ip string) (proto.Link, error)          // the board's Wi-Fi link; nil: ble.DialWiFi
+	DialOTA   func(ctx context.Context, network, addr string) (net.Conn, error) // the board's update server; nil: net.Dialer
+	WiFiCheck time.Duration                                                     // how often to try it (0: 2 s)
 
 	mu     sync.Mutex
 	conns  map[string]*Conn
@@ -291,6 +292,8 @@ func (s *Server) Do(ctx context.Context, req Request) Response {
 		return s.net(ctx, c, req.Text)
 	case "listen":
 		return s.listen(ctx, c, req.Text)
+	case "update":
+		return s.update(ctx, c, req)
 	}
 	return fail(fmt.Errorf("unknown command %q", req.Cmd))
 }

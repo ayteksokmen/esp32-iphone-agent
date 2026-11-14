@@ -42,6 +42,8 @@ const usage = `esp32agent: see and drive an iPhone through an ESP32 Agent board,
                                    Bluetooth, then moves the link to Wi-Fi (the iPhone mirrors over it too)
   net join SSID [PASSWORD]         the same, non-interactive
   net hotspot                      the board opens its own hotspot again
+  update FILE                      put a firmware image (.ino.bin) on the board over Wi-Fi, no USB cable;
+                                   waits for it to come back and reports its fw
   calibrate                        measure the pointer (automatic on the first tap)
   remirror                         restart Screen Mirroring on the phone (automatic when the video froze)
   face happy|ask|sad|neutral [S]   a feeling on the board's face (boards with a screen), for S seconds
@@ -172,6 +174,22 @@ func (a *App) Run(args []string) int {
 			return a.fail(errors.New("usage: esp32agent face happy|ask|sad|neutral [SECONDS]"))
 		}
 		return a.call(daemon.Request{Cmd: "face", Device: *dev, Text: strings.Join(pos, " ")})
+	case "update":
+		pos, err := parse(fs, rest)
+		if err != nil {
+			return a.fail(err)
+		}
+		if len(pos) != 1 {
+			return a.fail(errors.New("usage: esp32agent update FILE (hardware/build/hid_bridge.ino.bin)"))
+		}
+		file, err := filepath.Abs(pos[0]) // the daemon reads it, from its own working directory
+		if err != nil {
+			return a.fail(err)
+		}
+		if _, err := os.Stat(file); err != nil {
+			return a.fail(err)
+		}
+		return a.call(daemon.Request{Cmd: "update", Device: *dev, Text: file})
 	case "device":
 		pos, err := parse(fs, rest)
 		if err != nil {

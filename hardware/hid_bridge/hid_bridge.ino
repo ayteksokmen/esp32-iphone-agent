@@ -218,6 +218,12 @@ String board(const String &line, const String &id, char who) {
     }
     return "ok " + net_json(false);
   }
+  if (cmd == "ota" && who == FROM_CLI) {  // a one-time token for TCP 7300 (ota.h), so the CLI can update the board
+    if (ota_busy()) return "err an update is already running";
+    String t = ota_cli_token();
+    if (!t.length()) return "err this build has no OTA (--lean)";
+    return "ok " + t;
+  }
   if (cmd == "app" || cmd == "log") {  // debug relay: Mac -> app ("app run ...") and app -> Mac ("log ...")
     ble_reply(cmd + " " + arg);         // every peer sees it; each side ignores lines it doesn't handle
     if (cmd == "log") Serial.println("log " + arg);  // and a Mac on USB serial

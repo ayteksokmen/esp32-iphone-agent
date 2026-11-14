@@ -8,3 +8,7 @@
 bool ota_begin();
 bool ota_busy();
 void ota_confirm();  // marks the running image good (no-op when it already is)
+// The paired CLI's way in (`ota` over its sealed session, docs/cli-protocol.md "Firmware update"): a fresh random
+// token, good for one update within OTA_CLI_TTL_MS, never the app's video token. "" when this build has no OTA.
+const unsigned long OTA_CLI_TTL_MS = 120000;
+String ota_cli_token();

@@ -4,11 +4,41 @@
 #include "lwip/sockets.h"
 #include "wifi_video.h"
 #include "logbuf.h"
+#include <esp_random.h>
 
 const uint16_t PORT = 7300;
 const int IDLE_MS = 5000;  // no bytes for this long: the app is gone
 
 static volatile bool busy;
+static char cliTok[33];          // ota_cli_token(): one update, then it's gone
+static unsigned long cliTokAt;
+static portMUX_TYPE cliMux = portMUX_INITIALIZER_UNLOCKED;
+
+String ota_cli_token() {
+#if NO_OTA
+  return "";
+#else
+  uint8_t r[16];
+  esp_fill_random(r, sizeof r);
+  char t[33];
+  for (int i = 0; i < 16; i++) snprintf(t + 2 * i, 3, "%02x", r[i]);
+  portENTER_CRITICAL(&cliMux);
+  memcpy(cliTok, t, sizeof t);
+  cliTokAt = millis();
+  portEXIT_CRITICAL(&cliMux);
+  board_log("ota: token for the CLI");
+  return t;
+#endif
+}
+
+// tok is the CLI's token while it is fresh; used up either way.
+static bool cliTokenOk(const char *tok) {
+  portENTER_CRITICAL(&cliMux);
+  bool ok = cliTok[0] && millis() - cliTokAt < OTA_CLI_TTL_MS && strcmp(tok, cliTok) == 0;
+  if (ok) cliTok[0] = 0;
+  portEXIT_CRITICAL(&cliMux);
+  return ok;
+}
 
 // Keep the image until it proves itself (see ota_confirm); the core would mark it good at boot otherwise.
 // extern "C": the core's weak default is C, and a C++ definition (mangled) silently didn't replace it, so a
@@ -44,7 +74,7 @@ static void session(int c) {
   unsigned long size = 0;
   if (!readLine(c, head, sizeof head) || sscanf(head, "ota %39s %lu %39s", tok, &size, md5) != 3)
     return fail(c, "usage: ota <token> <size> <md5>");
-  if (wv_token() != tok) return fail(c, "wrong token");
+  if (wv_token() != tok && !cliTokenOk(tok)) return fail(c, "wrong token");
   if (strlen(md5) != 32) return fail(c, "bad md5");
   if (!Update.begin(size, U_FLASH)) return fail(c, Update.errorString());
   Update.setMD5(md5);
