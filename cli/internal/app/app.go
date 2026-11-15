@@ -48,6 +48,8 @@ const usage = `esp32agent: see and drive an iPhone through an ESP32 Agent board,
   net hotspot                      the board opens its own hotspot again
   cloud [HOST:PORT | off]          the cloud relay: the board dials out to it, and this computer reaches the
                                    board through it from anywhere (the session stays end-to-end encrypted)
+  cloud BOARD_ADDR MY_ADDR         the same relay under two names: the board's (home network) and this
+                                   computer's (e.g. a Tailscale name)
   relay [ADDR]                     run a cloud relay here (default :7400), for a server
   update FILE                      put a firmware image (.ino.bin) on the board over Wi-Fi, no USB cable;
                                    waits for it to come back and reports its fw
@@ -227,8 +229,8 @@ func (a *App) Run(args []string) int {
 		if err != nil {
 			return a.fail(err)
 		}
-		if len(pos) > 1 {
-			return a.fail(errors.New("usage: esp32agent cloud [HOST:PORT | off]"))
+		if len(pos) > 2 {
+			return a.fail(errors.New("usage: esp32agent cloud [HOST:PORT [HOST:PORT] | off]"))
 		}
 		return a.call(daemon.Request{Cmd: "cloud", Device: *dev, Text: strings.Join(pos, " ")})
 	case "relay": // runs the cloud relay in the foreground (a server's job; docs/cli-protocol.md, "Cloud relay")

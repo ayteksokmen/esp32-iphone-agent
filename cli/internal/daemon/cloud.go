@@ -63,22 +63,27 @@ func (s *Server) dialRelay(ctx context.Context, addr string, boardID []byte) (pr
 }
 
 // cloud: the relay the board dials out to, and the one this computer reaches boards through.
-// arg: "" (show), "HOST:PORT" (set both), "off" (stop both).
+// arg: "" (show), "HOST:PORT [HOST:PORT]" (the board's, and this computer's when it reaches the same relay by
+// another name, e.g. over Tailscale), "off" (stop both).
 func (s *Server) cloud(ctx context.Context, c *Conn, arg string) Response {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	arg = strings.TrimSpace(arg)
-	if arg != "" {
-		if arg != "off" {
-			if _, port, err := net.SplitHostPort(arg); err != nil || port == "" {
-				return fail(errors.New("usage: cloud [HOST:PORT | off]"))
+	f := strings.Fields(arg)
+	if len(f) > 0 {
+		usage := errors.New("usage: cloud [HOST:PORT [HOST:PORT] | off]")
+		if len(f) > 2 || f[0] == "off" && len(f) > 1 {
+			return fail(usage)
+		}
+		for _, a := range f {
+			if _, port, err := net.SplitHostPort(a); a != "off" && (err != nil || port == "") {
+				return fail(usage)
 			}
 		}
-		if _, err := c.Send(ctx, "cloud "+arg); err != nil {
+		if _, err := c.Send(ctx, "cloud "+f[0]); err != nil {
 			return fail(fmt.Errorf("the board did not take it (firmware before 0.2.7?): %w", err))
 		}
-		local := arg
-		if arg == "off" {
+		local := f[len(f)-1]
+		if local == "off" {
 			local = ""
 		}
 		if err := s.Config.SetRelay(local); err != nil {

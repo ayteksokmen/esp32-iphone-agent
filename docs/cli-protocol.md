@@ -143,7 +143,10 @@ home, and no BLE is needed. The relay only joins the two TCP links; the session 
   computer yet), `joined`. The status's `link.via` is `cloud` for a session through the relay.
 - **The CLI**: `esp32agent cloud HOST:PORT` sets the board's relay and this computer's (config `relay`,
   or `$ESP32AGENT_RELAY`); then every new session tries the relay first, for the one paired board (or the one
-  `--device` names), and BLE when that fails. `esp32agent relay [ADDR]` runs a relay (default `:7400`).
+  `--device` names), and BLE when that fails. `esp32agent cloud BOARD_ADDR MY_ADDR` when the two reach the same
+  relay by different names (the board by its home address, a computer away over Tailscale). A relay runs with
+  `esp32agent relay [ADDR]` or the small `esp32relay [ADDR]` (`cli/cmd/esp32relay`, for a server or a Pi;
+  default `:7400`).
 - **Not yet** (Phase 1): the relay doesn't check who attaches or joins. A stranger who knows a board id can't open a
   session (no K), but can hold the board's one relay link, or attach in its place; a board id is its BT MAC, which
   it advertises. The relay must authenticate both ends before it is shared.
