@@ -16,14 +16,14 @@ Arduino_DataBus *bus = nullptr;
 Arduino_CO5300 *gfx = nullptr;
 
 const uint16_t C_OK = RGB565(80, 220, 120), C_WAIT = RGB565(110, 110, 110), C_BAD = RGB565(240, 90, 80),
-               C_DIM = RGB565(90, 90, 90), C_EYE = RGB565(240, 240, 240);
+               C_DIM = RGB565(90, 90, 90), C_EYE = RGB565(250, 199, 117);  // warm amber
 
 // --- eyes -------------------------------------------------------------------------------------------------------
 // Drawn into a picture of the eye area in PSRAM, then sent to the panel in one go, so nothing flickers. Internal RAM
 // is tight (the AirPlay mirror task needs an 8 KB block), so the picture must not live there.
 const int AX = 20, AY = 70, AW = 440, AH = 300;  // the face's area on the screen
-const int EYE_W = 84, EYE_H = 150, EYE_R = 42;    // one eye at rest: a tall pill
-const int EYE_GAP = 180;                           // between the eyes' centres
+const int EYE_W = 104, EYE_H = 124, EYE_R = 36;   // one eye at rest: a rounded square
+const int EYE_GAP = 190;                           // between the eyes' centres
 const float REACH_X = 52, REACH_Y = 34;            // how far the eyes move from the middle
 const float EYES_Y = 128, MOUTH_Y = 262;           // where the eyes and the mouth sit in the area
 const float MOUTH_PEN = 4;                         // half the mouth line's thickness
@@ -146,6 +146,24 @@ void setMood(Mood m, uint32_t forMs) {
   moodUntil = forMs ? (millis() + forMs) | 1 : 0;
 }
 
+// Pupils: dark discs inside the eyes that look further than the eyes move, at where the face looks (curX, curY),
+// with a small light dot. Only on what is left of the eye after lids and arches, and not while it is nearly shut.
+const float PUPIL = 0.24f;  // radius, a fraction of the eye's smaller side
+
+void pupil(float cx, float cy, float w, float h, float gx, float gy) {
+  float r = PUPIL * fminf(w, h);
+  float px = cx + gx * (w / 2 - r - 8), py = cy + gy * (h / 2 - r - 8);
+  for (int y = max((int)(py - r), 0); y <= min((int)(py + r), AH - 1); y++) {
+    float dy = y + 0.5f - py, half = sqrtf(fmaxf(r * r - dy * dy, 0));
+    uint16_t *row = pic + y * AW;
+    for (int x = max((int)lroundf(px - half), 0); x < min((int)lroundf(px + half), AW); x++) {
+      if (row[x] != C_EYE) continue;  // outside what is left of the eye
+      float hx = x + 0.5f - (px + r * 0.35f), hy = y + 0.5f - (py - r * 0.35f);
+      row[x] = hx * hx + hy * hy < r * r * 0.08f ? C_EYE : RGB565_BLACK;  // the light dot
+    }
+  }
+}
+
 // fills one eye centred on (cx, cy) into the picture: a rounded rectangle, less what the lid and the arch cut away
 void eye(float cx, float cy, float w, float h, const Shape &s, bool left) {
   float r = fminf(EYE_R * w / EYE_W, h / 2);
@@ -210,6 +228,10 @@ void drawFace(float open) {
   float h = EYE_H * fmaxf(open, 0.06f);
   eye(AW / 2 - EYE_GAP / 2 + curX * REACH_X, cy - curL.raise, EYE_W * sl, h * sl, curL, true);
   eye(AW / 2 + EYE_GAP / 2 + curX * REACH_X, cy - curR.raise, EYE_W * sr, h * sr, curR, false);
+  if (open > 0.4f && curL.happy < 0.4f) {  // no pupils in a blink, asleep, or in happy arches
+    pupil(AW / 2 - EYE_GAP / 2 + curX * REACH_X, cy - curL.raise, EYE_W * sl, h * sl, curX, curY);
+    pupil(AW / 2 + EYE_GAP / 2 + curX * REACH_X, cy - curR.raise, EYE_W * sr, h * sr, curX, curY);
+  }
   mouth(AW / 2 + curX * REACH_X * 0.6f + curM.shift, MOUTH_Y + curY * 12, curM);  // turns with the eyes, less far
   gfx->draw16bitRGBBitmap(AX, AY, pic, AW, AH);
 }
