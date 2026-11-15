@@ -2,6 +2,7 @@
 package app
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,13 +11,16 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/onehumanbeing/esp32-iphone-agent/cli/internal/ble"
 	"github.com/onehumanbeing/esp32-iphone-agent/cli/internal/config"
 	"github.com/onehumanbeing/esp32-iphone-agent/cli/internal/daemon"
+	"github.com/onehumanbeing/esp32-iphone-agent/cli/internal/relay"
 )
 
 // Version is set at build time (-ldflags "-X .../internal/app.Version=1.2.3").
@@ -42,6 +46,9 @@ const usage = `esp32agent: see and drive an iPhone through an ESP32 Agent board,
                                    Bluetooth, then moves the link to Wi-Fi (the iPhone mirrors over it too)
   net join SSID [PASSWORD]         the same, non-interactive
   net hotspot                      the board opens its own hotspot again
+  cloud [HOST:PORT | off]          the cloud relay: the board dials out to it, and this computer reaches the
+                                   board through it from anywhere (the session stays end-to-end encrypted)
+  relay [ADDR]                     run a cloud relay here (default :7400), for a server
   update FILE                      put a firmware image (.ino.bin) on the board over Wi-Fi, no USB cable;
                                    waits for it to come back and reports its fw
   calibrate                        measure the pointer (automatic on the first tap)
@@ -215,6 +222,30 @@ func (a *App) Run(args []string) int {
 			text = "join " + pos[1] + "\x00" + strings.Join(pos[2:], " ")
 		}
 		return a.call(daemon.Request{Cmd: "net", Device: *dev, Text: text})
+	case "cloud":
+		pos, err := parse(fs, rest)
+		if err != nil {
+			return a.fail(err)
+		}
+		if len(pos) > 1 {
+			return a.fail(errors.New("usage: esp32agent cloud [HOST:PORT | off]"))
+		}
+		return a.call(daemon.Request{Cmd: "cloud", Device: *dev, Text: strings.Join(pos, " ")})
+	case "relay": // runs the cloud relay in the foreground (a server's job; docs/cli-protocol.md, "Cloud relay")
+		pos, err := parse(fs, rest)
+		if err != nil {
+			return a.fail(err)
+		}
+		addr := ":7400"
+		if len(pos) == 1 {
+			addr = pos[0]
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := (&relay.Server{}).ListenAndServe(ctx, addr); err != nil && ctx.Err() == nil {
+			return a.fail(err)
+		}
+		return 0
 	case "listen":
 		pos, err := parse(fs, rest)
 		if err != nil {

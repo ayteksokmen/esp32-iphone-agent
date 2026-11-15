@@ -63,11 +63,29 @@ func (c *Config) SetListen(l Listen) error {
 	return c.Save()
 }
 
+// RelayAddr is the cloud relay to reach boards through: $ESP32AGENT_RELAY, else Relay ("" none).
+func (c *Config) RelayAddr() string {
+	if r := os.Getenv("ESP32AGENT_RELAY"); r != "" {
+		return r
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Relay
+}
+
+func (c *Config) SetRelay(addr string) error {
+	c.mu.Lock()
+	c.Relay = addr
+	c.mu.Unlock()
+	return c.Save()
+}
+
 // Config is config.json. It holds the pairing keys: mode 0600, dir 0700.
 type Config struct {
 	ClientID string           `json:"client_id"`
 	Boards   map[string]Board `json:"boards"` // board id (12 hex) → key
 	Listen   Listen           `json:"listen"`
+	Relay    string           `json:"relay,omitempty"` // "host:port" of the cloud relay; "" none
 	path     string
 	mu       sync.Mutex
 }
@@ -147,6 +165,17 @@ func (c *Config) Forget(id string) error {
 	os.Remove(CalibrationPath(filepath.Dir(c.path), id))
 	os.Remove(KeyboardPath(filepath.Dir(c.path), id))
 	return c.Save()
+}
+
+// IDs are the paired boards' ids.
+func (c *Config) IDs() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for id := range c.Boards {
+		out = append(out, id)
+	}
+	return out
 }
 
 // Match finds paired board ids for a selector: a full id, or the 4-hex name suffix ("ESP32 Agent 6AD5").

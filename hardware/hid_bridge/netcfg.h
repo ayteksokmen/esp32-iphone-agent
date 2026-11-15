@@ -23,5 +23,7 @@ uint16_t cfg_height();
 uint8_t cfg_fps();
 void cfg_set_res(uint16_t w, uint16_t h);
 void cfg_set_fps(uint8_t fps);
+String cfg_cloud();                       // the relay the board dials out to, "host:port" ("" off; cli_tcp.h)
+void cfg_set_cloud(const String &hostPort);
 void cfg_ed25519_seed(uint8_t seed[32]);  // created once, stable across boots
 String board_suffix();                    // "1A2B": last two BT MAC bytes

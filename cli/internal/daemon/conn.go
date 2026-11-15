@@ -85,8 +85,8 @@ func (c *Conn) connected() bool {
 	return c.sess != nil
 }
 
-// attach takes over a fresh session on link l (via "ble" or "wifi") and turns on the CLI's own video stream.
-// The session it replaces stops: a BLE one keeps its link as the way back, a Wi-Fi one is closed.
+// attach takes over a fresh session on link l (via "ble", "wifi" or "cloud") and turns on the CLI's own video
+// stream. The session it replaces stops: a BLE one keeps its link as the way back, the others are closed.
 func (c *Conn) attach(s *proto.Session, via string, l proto.Link) error {
 	c.swap.Lock()
 	defer c.swap.Unlock()
@@ -108,7 +108,7 @@ func (c *Conn) attach(s *proto.Session, via string, l proto.Link) error {
 	// from the GOP replayed minutes of old pictures at every Wi-Fi/BLE move, and once the board's GOP had filled up
 	// (frozen) it could not be resent at all: the screen stayed frozen until mirroring restarted (2026-11-12).
 	c.mu.Unlock() // pending commands stay: the board sends their replies on the new session
-	if old != nil && oldVia == "wifi" {
+	if old != nil && oldVia != "ble" {
 		old.Close()
 	}
 	go c.read(s, quit)

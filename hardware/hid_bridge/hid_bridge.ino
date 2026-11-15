@@ -220,6 +220,11 @@ String board(const String &line, const String &id, char who) {
     }
     return "ok " + net_json(false);
   }
+  if (cmd == "cloud" && who == FROM_CLI) {  // the relay the board dials out to (docs/cli-protocol.md, "Cloud relay")
+    if (!arg.length()) return "ok " + cli_tcp_cloud_json();
+    String e = cli_tcp_cloud_set(arg == "off" ? "" : arg);
+    return e.length() ? "err " + e : "ok " + cli_tcp_cloud_json();
+  }
   if (cmd == "ota" && who == FROM_CLI) {  // a one-time token for TCP 7300 (ota.h), so the CLI can update the board
     if (ota_busy()) return "err an update is already running";
     String t = ota_cli_token();
@@ -332,7 +337,7 @@ String statusJson(bool full, char who) {
   bool app = ble_app_active();
   if (who == FROM_CLI) {  // the CLI's own link, not the app's (ble.mtu above is the app's)
     size_t l = strlen(s);
-    snprintf(s + l - 1, sizeof s - l + 1, ",\"link\":{\"via\":\"%s\",\"mtu\":%u,\"kbps\":%lu}}", cli_wifi() ? "wifi" : "ble",
+    snprintf(s + l - 1, sizeof s - l + 1, ",\"link\":{\"via\":\"%s\",\"mtu\":%u,\"kbps\":%lu}}", cli_wifi() ? (cli_tcp_cloud_joined() ? "cloud" : "wifi") : "ble",
              cli_mtu(), (unsigned long)(cli_wifi() ? cli_tcp_kbps() : ble_kbps()));
   }
   const char *owner = arb_owner_name(arb_owner(app, cli_slot() >= 0));
@@ -355,7 +360,7 @@ String statusJson(bool full, char who) {
   snprintf(s + strlen(s), sizeof s - strlen(s), ",\"owner\":\"%s\"", owner);
   if (who == FROM_CLI)
     snprintf(s + strlen(s), sizeof s - strlen(s), ",\"busy\":%d,\"ip\":\"%s\",\"link\":{\"via\":\"%s\",\"mtu\":%u}", app,
-             net_ip().c_str(), cli_wifi() ? "wifi" : "ble", cli_mtu());
+             net_ip().c_str(), cli_wifi() ? (cli_tcp_cloud_joined() ? "cloud" : "wifi") : "ble", cli_mtu());
   strlcat(s, "}", sizeof s);
   return s;
 }
@@ -363,10 +368,12 @@ String statusJson(bool full, char who) {
 void statusTask(void *) {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(1000));
-    if (!ble_connected()) continue;
-    String s = statusJson(true, FROM_APP);
-    if (s.length() > ble_mtu() - 3u) s = statusJson(false, FROM_APP);
-    ble_status(s);
+    if (ble_connected()) {
+      String s = statusJson(true, FROM_APP);
+      if (s.length() > ble_mtu() - 3u) s = statusJson(false, FROM_APP);
+      ble_status(s);
+    }
+    // also with no BLE peer at all: a CLI on the home Wi-Fi or through the relay
     if (cli_slot() >= 0) ble_cli_status(statusJson(true, FROM_CLI), statusJson(false, FROM_CLI));
   }
 }

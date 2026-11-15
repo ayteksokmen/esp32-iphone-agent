@@ -1,5 +1,7 @@
 // The CLI's link over Wi-Fi (docs/cli-protocol.md, "Wi-Fi link"): TCP port 7202, one computer at a time, the
 // same sealed frames as on BLE in records [u16 LE length][frame]. A zero-length record is a keepalive.
+// The board can also dial out to a relay on the internet ("cloud", docs/cli-protocol.md "Cloud relay"): the relay
+// joins it to a computer anywhere, and the same sealed session runs through it end to end.
 // Pairing stays BLE-only (it needs the board's pairing window); a session here is cli_link.cpp's slot CLI_TCP_SLOT.
 #pragma once
 #include <Arduino.h>
@@ -12,3 +14,8 @@ bool cli_tcp_up();                                               // a computer i
 bool cli_tcp_send(const uint8_t *p, size_t n, uint32_t timeout_ms);  // one record; false (and dropped) if it stalls
 void cli_tcp_drop();                                             // closes the connection
 uint32_t cli_tcp_kbps();                                         // bytes out, last second
+
+// Cloud relay. cli_tcp_cloud_set: "host:port", or "" to stop; returns "" or why it was refused. Saved in NVS.
+String cli_tcp_cloud_set(const String &hostPort);
+String cli_tcp_cloud_json();                                      // {"relay","state","err"}
+bool cli_tcp_cloud_joined();                                      // the computer's link runs through the relay

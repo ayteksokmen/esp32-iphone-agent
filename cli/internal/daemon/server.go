@@ -60,9 +60,10 @@ type Server struct {
 	Version   string
 	Idle      time.Duration // exit after this long without requests (0 = never)
 	ScanTime  time.Duration
-	DialWiFi  func(ctx context.Context, ip string) (proto.Link, error)          // the board's Wi-Fi link; nil: ble.DialWiFi
-	DialOTA   func(ctx context.Context, network, addr string) (net.Conn, error) // the board's update server; nil: net.Dialer
-	WiFiCheck time.Duration                                                     // how often to try it (0: 2 s)
+	DialWiFi  func(ctx context.Context, ip string) (proto.Link, error)                   // the board's Wi-Fi link; nil: ble.DialWiFi
+	DialOTA   func(ctx context.Context, network, addr string) (net.Conn, error)          // the board's update server; nil: net.Dialer
+	DialRelay func(ctx context.Context, addr string, boardID []byte) (proto.Link, error) // tests; nil: ble.DialRelay
+	WiFiCheck time.Duration                                                              // how often to try it (0: 2 s)
 
 	mu     sync.Mutex
 	conns  map[string]*Conn
@@ -290,6 +291,8 @@ func (s *Server) Do(ctx context.Context, req Request) Response {
 		return s.boardLog(ctx, c)
 	case "net":
 		return s.net(ctx, c, req.Text)
+	case "cloud":
+		return s.cloud(ctx, c, req.Text)
 	case "listen":
 		return s.listen(ctx, c, req.Text)
 	case "update":
@@ -426,15 +429,23 @@ func (s *Server) conn(ctx context.Context, sel string) (*Conn, error) {
 	if s.appBusy() {
 		return nil, ErrAppBusy
 	}
+	c, cloudErr := s.viaRelay(ctx, sel)
+	if c != nil {
+		return c, nil
+	}
 	f, err := s.pick(ctx, sel, true)
 	if err != nil {
+		if cloudErr != nil {
+			return nil, fmt.Errorf("%w; through the relay: %v", err, cloudErr)
+		}
 		return nil, err
 	}
-	return s.open(ctx, f, sel, nil)
+	return s.open(ctx, f, sel, nil, "ble")
 }
 
-// open connects to f and starts a session. l: an already open link (after PAIR).
-func (s *Server) open(ctx context.Context, f ble.Found, sel string, l proto.Link) (*Conn, error) {
+// open connects to f and starts a session. l: an already open link (after PAIR, or the relay's), via: "ble" or
+// "cloud".
+func (s *Server) open(ctx context.Context, f ble.Found, sel string, l proto.Link, via string) (*Conn, error) {
 	s.linkMu.Lock()
 	defer s.linkMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -481,12 +492,12 @@ func (s *Server) open(ctx context.Context, f ble.Found, sel string, l proto.Link
 		s.conns[id] = c
 	}
 	s.mu.Unlock()
-	c.attach(sess, "ble", l)
+	c.attach(sess, via, l)
 	if err := c.start(); err != nil {
 		c.detach(sess, err)
 		return nil, fmt.Errorf("board %s did not answer: %w", id, err)
 	}
-	log.Printf("%s: connected (%s)", id, f.Name)
+	log.Printf("%s: connected (%s, %s)", id, f.Name, via)
 	return c, nil
 }
 
@@ -519,7 +530,7 @@ func (s *Server) pair(ctx context.Context, sel string) Response {
 		delete(s.conns, idHex(boardID))
 	}
 	s.mu.Unlock()
-	c, err := s.open(ctx, f, "", l)
+	c, err := s.open(ctx, f, "", l, "ble")
 	if err != nil {
 		return fail(fmt.Errorf("paired, but the session failed: %w", err))
 	}

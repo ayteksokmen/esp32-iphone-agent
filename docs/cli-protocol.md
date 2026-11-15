@@ -116,6 +116,38 @@ the session moves there and BLE stays connected as the way back.
   the same network). The CLI's status has `link`: `{"via":"ble"|"wifi","mtu":…,"kbps":…}` for its own link.
 - `ESP32AGENT_TRANSPORT=ble` (or `esp32agent net via ble`) keeps the session on BLE.
 
+## Cloud relay
+The board can also dial out to a relay on the internet, so a computer anywhere reaches it: no port is opened at
+home, and no BLE is needed. The relay only joins the two TCP links; the session inside is the paired one above
+(HELLO/WELCOME, then AES-GCM DATA), so it never sees commands, replies, video or keys.
+- **Records** as on the Wi-Fi link (`[u16 LE length][frame]`, zero length a keepalive), with three plain frames of
+  the relay's own before the pipe starts:
+
+  | type | dir | body |
+  |---|---|---|
+  | `0x03` ATTACH | board → relay | `board_id[6]` |
+  | `0x04` JOIN | computer → relay | `board_id[6]` |
+  | `0x84` JOINED | relay → computer | (empty): the board is on the other end now |
+  | `0xE0` ERROR | relay → computer | UTF-8 reason, `board offline` when no board is attached under that id |
+
+- **The board** (`hardware/hid_bridge/cli_tcp.cpp`) dials the relay while it is on a Wi-Fi with a way out (station
+  mode) and no computer uses port 7202: a computer at home comes first, and takes over a relay link still waiting
+  for one. It sends ATTACH, then waits; the relay sends a keepalive every 2 s, and the board drops a relay link quiet
+  for 6 s. The relay's first non-empty record is the computer's first frame (HELLO): from there the link is the
+  CLI's TCP slot, as a local one. After the session the relay closes the link and the board dials again at once;
+  when it can't reach the relay it waits 2 s, doubling up to a minute.
+- **The relay** keeps one waiting link per board id (a new ATTACH replaces the old) and hands it to the first
+  JOIN; then it copies bytes both ways until either side closes. One computer per board, as on port 7202.
+- **`cloud`** (CLI only): `ok {"relay","state","err"}`; `cloud HOST:PORT` sets it (kept in NVS), `cloud off`
+  stops it. `state`: `off`, `local` (a computer at home holds the link), `dialing`, `waiting` (attached, no
+  computer yet), `joined`. The status's `link.via` is `cloud` for a session through the relay.
+- **The CLI**: `esp32agent cloud HOST:PORT` sets the board's relay and this computer's (config `relay`,
+  or `$ESP32AGENT_RELAY`); then every new session tries the relay first, for the one paired board (or the one
+  `--device` names), and BLE when that fails. `esp32agent relay [ADDR]` runs a relay (default `:7400`).
+- **Not yet** (Phase 1): the relay doesn't check who attaches or joins. A stranger who knows a board id can't open a
+  session (no K), but can hold the board's one relay link, or attach in its place; a board id is its BT MAC, which
+  it advertises. The relay must authenticate both ends before it is shared.
+
 ## Firmware update
 `esp32agent update FILE` puts a firmware image on the board over Wi-Fi, so a board plugged into the iPhone needs
 no USB cable to the computer.

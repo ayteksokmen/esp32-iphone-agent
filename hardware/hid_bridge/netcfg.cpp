@@ -221,6 +221,9 @@ void cfg_set_res(uint16_t w, uint16_t h) {
 
 void cfg_set_fps(uint8_t fps) { prefs.putUChar("fps", fps); }
 
+String cfg_cloud() { return prefs.getString("cloud", ""); }
+void cfg_set_cloud(const String &hostPort) { prefs.putString("cloud", hostPort); }
+
 void cfg_ed25519_seed(uint8_t seed[32]) {
   if (prefs.getBytes("ed_seed", seed, 32) == 32) return;
   esp_fill_random(seed, 32);
