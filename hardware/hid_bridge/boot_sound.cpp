@@ -75,6 +75,8 @@ float sample(float t, float &phase, float &breathLp) {
   return out;
 }
 
+volatile bool busy = false;
+
 void play(void *) {
   I2SClass i2s;
   i2s.setPins(I2S_BCK, I2S_WS, I2S_DO, I2S_DI, I2S_MCK);
@@ -113,15 +115,23 @@ void play(void *) {
   }
   i2s.end();
   Wire.end();
+  busy = false;
   vTaskDelete(NULL);
 }
 }  // namespace
 
 void boot_sound_play() {
-  // a task of its own, so the face animates meanwhile; gone again after ~2 s, before mirroring can start
-  if (xTaskCreatePinnedToCore(play, "sound", 4096, NULL, 1, NULL, 1) != pdPASS) board_log("sound: no task");
+  // a task of its own, so the face animates meanwhile (boot waits for it: boot_sound_busy)
+  busy = true;
+  if (xTaskCreatePinnedToCore(play, "sound", 4096, NULL, 1, NULL, 1) != pdPASS) {
+    busy = false;
+    board_log("sound: no task");
+  }
 }
+
+bool boot_sound_busy() { return busy; }
 
 #else
 void boot_sound_play() {}
+bool boot_sound_busy() { return false; }
 #endif

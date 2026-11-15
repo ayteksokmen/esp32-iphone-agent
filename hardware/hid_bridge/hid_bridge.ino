@@ -453,6 +453,21 @@ void setup() {
   esp_task_wdt_reconfigure(&wdt);
   esp_task_wdt_add(NULL);
   readCrash();
+#if BOARD_AMOLED_216
+  // The face wakes up with a yawn, in sight and in sound, before anything else sets up: the sound's driver comes and
+  // goes while internal RAM is still in one piece (see boot_sound.h). Takes about 2 s.
+  screenOk = screen_begin();
+  if (!screenOk) board_log("screen: panel did not start");
+  if (screenOk) {
+    screen_wakeup();
+    boot_sound_play();
+    for (uint32_t end = millis() + 4000; boot_sound_busy() && (int32_t)(millis() - end) < 0;) {
+      screen_tick();
+      esp_task_wdt_reset();
+      delay(10);
+    }
+  }
+#endif
 
   net_begin();
   if (!video_begin()) board_log("video: no PSRAM for the GOP buffer");
@@ -464,14 +479,6 @@ void setup() {
   ble_begin("ESP32 Agent " + board_suffix());
   startAirplay();
   xTaskCreatePinnedToCore(statusTask, "status", 4096, NULL, 1, NULL, 1);
-#if BOARD_AMOLED_216
-  screenOk = screen_begin();
-  if (!screenOk) board_log("screen: panel did not start");
-  if (screenOk) {  // wake up with a yawn, in sight and in sound
-    screen_wakeup();
-    boot_sound_play();
-  }
-#endif
   board_log("boot %s fw %s: free internal heap %u (largest %u), PSRAM %u, reset %s\n", receiverName.c_str(), FW_VERSION,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
