@@ -280,6 +280,31 @@ static void audio_packet(void) {
   ap_cfg.on_audio(ev == AP_GATE_START ? AIRPLAY_AUDIO_START : AIRPLAY_AUDIO_FRAME, frame, rtp.len, rtp.ts);
 }
 
+static void mirror_task(void *arg);
+
+#if MIRROR_STACK_PSRAM
+// Test build (flash.sh --mirror-psram): the mirror task's 8 KB stack in PSRAM, made once and used again by each
+// session, so starting mirroring needs no 8 KB block of internal RAM (only the ~350-byte task block, kept too).
+// A task with its stack in PSRAM must not write flash itself; this one doesn't.
+static bool start_mirror_task(void) {
+  static StackType_t *stack;
+  static StaticTask_t *tcb;
+  static TaskHandle_t prev;
+  if (!stack) stack = heap_caps_malloc(8 * 1024, MALLOC_CAP_SPIRAM);
+  if (!tcb) tcb = heap_caps_malloc(sizeof *tcb, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!stack || !tcb) return false;
+  // the last session's task must be gone before its stack is used again
+  for (int i = 0; prev && eTaskGetState(prev) != eDeleted && i < 100; i++) vTaskDelay(pdMS_TO_TICKS(10));
+  if (prev && eTaskGetState(prev) != eDeleted) return false;
+  prev = xTaskCreateStaticPinnedToCore(mirror_task, "mirror", 8 * 1024, NULL, 6, stack, tcb, 0);
+  return prev != NULL;
+}
+#else
+static bool start_mirror_task(void) {
+  return xTaskCreatePinnedToCore(mirror_task, "mirror", 8 * 1024, NULL, 6, NULL, 0) == pdPASS;
+}
+#endif
+
 static void mirror_task(void *arg) {
   uint8_t hdr[128], ntp[32] = {0x80, 0xd2, 0x00, 0x07}, scratch[128];
   uint8_t *payload = NULL;
@@ -410,7 +435,7 @@ bool ap_mirror_start(const uint8_t aeskey[16], uint64_t stream_id, uint32_t remo
   a.buf = heap_caps_malloc(AUDIO_PACKET_MAX, MALLOC_CAP_SPIRAM);  // NULL: packets are drained, not forwarded
   m.run = true;
   m.done = false;
-  if (m.lfd < 0 || xTaskCreatePinnedToCore(mirror_task, "mirror", 8 * 1024, NULL, 6, NULL, 0) != pdPASS) {
+  if (m.lfd < 0 || !start_mirror_task()) {
     m.run = false;
     m.done = true;
     close_fd(&m.lfd);

@@ -32,6 +32,7 @@
 #include "logbuf.h"
 #include "status_screen.h"
 #include "boot_sound.h"
+#include "audio_spike.h"
 
 const int STEP = 10;      // pointer speed per report while moving (any direction, see pace.h)
 const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
@@ -272,6 +273,7 @@ String board(const String &line, const String &id, char who) {
     }
     return "err usage: face neutral|work|think|happy|ask|sad|sleep [seconds]";
   }
+  if (cmd == "spike") return audio_spike(arg);  // test builds: does a voice pipeline fit (audio_spike.cpp)
   if (cmd == "logs") return board_log_page(arg);  // the RAM log, a page at a time (logbuf.h)
   if (cmd == "vdbg") return "ok " + video_debug();  // why a frozen screen stays frozen (video_link.cpp)
   if (cmd == "crash") return String("ok rst ") + resetReason() + ", last dump: " + lastCrash;
