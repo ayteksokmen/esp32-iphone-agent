@@ -22,6 +22,7 @@ struct ScreenInfo {
 
 bool screen_begin();                    // false when the panel did not come up
 void screen_show(const ScreenInfo &s);  // redraws the state lines that changed
+void screen_wakeup();                   // after boot: the face wakes up with a yawn (boot_sound.h plays it)
 void screen_tick();                     // moves the eyes on; call it often (loop)
 void screen_look(float x, float y);     // look at this point of the phone's screen (fractions, 0-1)
 

@@ -44,6 +44,7 @@ struct Shape {
 // ring ("o"); shift moves it sideways.
 struct Mouth {
   float w = 34, curve = 5, ring = 0, shift = 0;
+  float fill = 0;  // > 0.5: the ring is a filled oval, a wide-open mouth
 };
 struct Pose {
   Shape l, r;
@@ -53,6 +54,32 @@ struct Pose {
   bool blinks = true;
   float open = 1;
 };
+
+// Waking up, after boot (in step with boot_sound.cpp's times): eyes shut, a yawn (eyes squeezed into arches, the
+// mouth a wide-open oval), drowsy, then two blinks and awake.
+const uint32_t WAKE_YAWN_MS = 250, WAKE_DROWSY_MS = 1350, WAKE_DONE_MS = 1650;
+
+Pose wakePose(uint32_t t) {
+  Pose p;
+  p.blinks = false;
+  p.gaze = true;
+  if (t < WAKE_YAWN_MS) {  // still asleep
+    p.open = 0.06f;
+    p.gy = 0.35f;
+    p.m.w = 14, p.m.curve = 0;
+  } else if (t < WAKE_DROWSY_MS) {  // the yawn
+    p.open = 0.5f;
+    p.l.happy = p.r.happy = 1;
+    p.l.raise = p.r.raise = 8;
+    p.gy = -0.35f;
+    p.m.w = 0, p.m.curve = 0, p.m.ring = 22, p.m.fill = 1;
+  } else {  // drowsy
+    p.l.lid = p.r.lid = 0.45f;
+    p.gy = 0.1f;
+    p.m.w = 16, p.m.curve = 0;
+  }
+  return p;
+}
 
 Pose poseFor(Mood m) {
   Pose p;
@@ -109,7 +136,9 @@ Mouth curM;
 float curOpen = 1;
 Mood mood = MOOD_NEUTRAL;
 uint32_t moodUntil = 0;  // a feeling set by `face` lasts until then (0: until something else happens)
+uint32_t wakeStart = 0;  // the wake-up animation runs from then (0: not)
 uint32_t lastFrame = 0, blinkAt = 0, blinkStart = 0, wanderAt = 0, lookedAt = 0, tapStart = 0, activeAt = 0;
+bool wakeBlinks = false;  // the blink after waking up comes twice
 bool blinking = false, twice = false, tapping = false, drawn = false, dim = false;
 
 void setMood(Mood m, uint32_t forMs) {
@@ -157,7 +186,14 @@ void mouth(float cx, float cy, const Mouth &m) {
       disc(cx + u * m.w / 2, cy + m.curve * (1 - u * u) - m.curve / 2, MOUTH_PEN);
     }
   }
-  if (m.ring > 1) {  // the "o"
+  if (m.ring > 1 && m.fill > 0.5f) {  // wide open: a filled oval
+    float rx = m.ring, ry = m.ring * 1.25f;
+    for (int y = max((int)(cy - ry), 0); y <= min((int)(cy + ry), AH - 1); y++) {
+      float dy = (y + 0.5f - cy) / ry, half = rx * sqrtf(fmaxf(1 - dy * dy, 0));
+      uint16_t *row = pic + y * AW;
+      for (int x = max((int)lroundf(cx - half), 0); x < min((int)lroundf(cx + half), AW); x++) row[x] = C_EYE;
+    }
+  } else if (m.ring > 1) {  // the "o"
     int n = (int)(m.ring * 6);
     for (int i = 0; i < n; i++) {
       float a = i * 2 * (float)M_PI / n;
@@ -196,6 +232,7 @@ bool easeMouth(Mouth &a, const Mouth &b) {
   m |= ease(a.curve, b.curve, 0.3f);
   m |= ease(a.ring, b.ring, 0.3f);
   m |= ease(a.shift, b.shift, 0.3f);
+  a.fill = b.fill;
   return m;
 }
 
@@ -270,6 +307,14 @@ void screen_face(Mood m, uint32_t forMs) {
   if (m == MOOD_SLEEP) activeAt = 0;
 }
 
+void screen_wakeup() {
+  if (!gfx) return;
+  wakeStart = millis() | 1;
+  curOpen = 0.06f;  // start asleep
+  curM.w = 14, curM.curve = 0;
+  drawn = false;
+}
+
 void screen_tick() {
   if (!gfx || !pic) return;
   uint32_t now = millis();
@@ -291,6 +336,20 @@ void screen_tick() {
     gfx->setBrightness(SLEEP_BRIGHTNESS);
   }
   Pose pose = poseFor(mood);
+  if (wakeStart) {
+    uint32_t t = now - wakeStart;
+    if (t < WAKE_DONE_MS) {
+      pose = wakePose(t);
+      lookedAt = 0;
+    } else {  // awake: two blinks, then the usual
+      wakeStart = 0;
+      setMood(MOOD_NEUTRAL, 0);
+      activeAt = now | 1;
+      blinkAt = now + 80;
+      twice = false;
+      wakeBlinks = true;
+    }
+  }
 
   // where to look
   if (lookedAt && now - lookedAt > LOOK_HOLD_MS) {  // done looking: back towards the middle
@@ -319,7 +378,8 @@ void screen_tick() {
     float p = (now - blinkStart) / (float)BLINK_MS;  // closes, then opens
     if (p >= 1) {
       blinking = false;
-      if (!twice && randomIn(0, 5) == 0) {  // now and then a second blink right after
+      if (!twice && (wakeBlinks || randomIn(0, 5) == 0)) {  // now and then a second blink right after
+        wakeBlinks = false;
         twice = true;
         blinkAt = now + 120;
       } else {
@@ -375,6 +435,7 @@ void screen_show(const ScreenInfo &s) {
 #else
 bool screen_begin() { return false; }
 void screen_show(const ScreenInfo &) {}
+void screen_wakeup() {}
 void screen_tick() {}
 void screen_look(float, float) {}
 void screen_active() {}

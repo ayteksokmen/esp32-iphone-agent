@@ -31,6 +31,7 @@
 #include "src/cli/cli_proto.h"
 #include "logbuf.h"
 #include "status_screen.h"
+#include "boot_sound.h"
 
 const int STEP = 10;      // pointer speed per report while moving (any direction, see pace.h)
 const int STEP_MS = 8;    // report interval; constant pace keeps iOS acceleration predictable
@@ -466,6 +467,10 @@ void setup() {
 #if BOARD_AMOLED_216
   screenOk = screen_begin();
   if (!screenOk) board_log("screen: panel did not start");
+  if (screenOk) {  // wake up with a yawn, in sight and in sound
+    screen_wakeup();
+    boot_sound_play();
+  }
 #endif
   board_log("boot %s fw %s: free internal heap %u (largest %u), PSRAM %u, reset %s\n", receiverName.c_str(), FW_VERSION,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
