@@ -15,6 +15,7 @@
 #include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "mbedtls/aes.h"
@@ -282,22 +283,29 @@ static void audio_packet(void) {
 
 static void mirror_task(void *arg);
 
-#if MIRROR_STACK_PSRAM
-// Test build (flash.sh --mirror-psram): the mirror task's 8 KB stack in PSRAM, made once and used again by each
-// session, so starting mirroring needs no 8 KB block of internal RAM (only the ~350-byte task block, kept too).
-// A task with its stack in PSRAM must not write flash itself; this one doesn't.
+#if !MIRROR_STACK_INTERNAL
+// The mirror task's 8 KB stack is in PSRAM: with it in internal RAM, about 7 KB less was free while mirroring,
+// starting a session needed an 8 KB block that fragmentation sometimes did not leave ("setup: mirror stream
+// failed"), and a voice pipeline next to mirroring starved the Wi-Fi link (docs/voice-spike.md). The task is made
+// once and never deleted (a task with its stack in PSRAM is best not deleted by itself); each session is one turn
+// of its loop, started by a notification. It must not write flash: neither it nor what it calls (video, logs, the
+// links) does. flash.sh --mirror-internal puts it back in internal RAM, one task per session.
+static TaskHandle_t host;
+
+static void mirror_host(void *arg) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    mirror_task(NULL);
+  }
+}
+
 static bool start_mirror_task(void) {
-  static StackType_t *stack;
-  static StaticTask_t *tcb;
-  static TaskHandle_t prev;
-  if (!stack) stack = heap_caps_malloc(8 * 1024, MALLOC_CAP_SPIRAM);
-  if (!tcb) tcb = heap_caps_malloc(sizeof *tcb, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  if (!stack || !tcb) return false;
-  // the last session's task must be gone before its stack is used again
-  for (int i = 0; prev && eTaskGetState(prev) != eDeleted && i < 100; i++) vTaskDelay(pdMS_TO_TICKS(10));
-  if (prev && eTaskGetState(prev) != eDeleted) return false;
-  prev = xTaskCreateStaticPinnedToCore(mirror_task, "mirror", 8 * 1024, NULL, 6, stack, tcb, 0);
-  return prev != NULL;
+  if (!host && xTaskCreatePinnedToCoreWithCaps(mirror_host, "mirror", 8 * 1024, NULL, 6, &host, 0, MALLOC_CAP_SPIRAM) != pdPASS) {
+    host = NULL;
+    return false;
+  }
+  xTaskNotifyGive(host);
+  return true;
 }
 #else
 static bool start_mirror_task(void) {
@@ -396,7 +404,9 @@ static void mirror_task(void *arg) {
   m.held_set = m.held_ready = false;
   mbedtls_aes_free(&m.aes);
   m.done = true;
+#if MIRROR_STACK_INTERNAL
   vTaskDelete(NULL);
+#endif
 }
 
 static void derive(const char *label, uint64_t id, const uint8_t aeskey[16], uint8_t out[16]) {

@@ -52,6 +52,18 @@ Python socket on a computer stood in for the cloud.
 5. **Tap-to-talk first.** Open the audio path when someone taps the face and close it after the reply. A wake word
    that is always on would keep these 4.6 KB taken all the time.
 
+## Made the default (firmware 0.2.6)
+- The mirror task's stack is in PSRAM in every build. `flash.sh --mirror-internal` builds it the old way, to
+  compare.
+- The task is made once and never deleted; each session is one turn of its loop. A task with its stack in PSRAM
+  is best not deleted by itself, and reusing a static stack after deleting its task was a race.
+- **Soak test on the phone:**
+  - Five full restarts of mirroring (stop, then start): all came back, and free internal RAM went back to the same
+    31.3 KB each time.
+  - About 18 minutes of mirroring with a screenshot every 30 s: no freeze, no overflow, free internal RAM steady at
+    30.4–31.3 KB, all 36 screenshots arrived. It ended when the phone locked itself.
+- **Before:** about 23 KB free while mirroring.
+
 ## Not measured yet
 - Playing real speech through the amplifier while the mic records (echo).
 - Compression's CPU cost.

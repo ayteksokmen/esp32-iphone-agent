@@ -28,7 +28,7 @@ for a in "$@"; do
     --lean) DEFS+=" -DNO_OTA=1 -DNO_PHONE_AUDIO=1" ;;  # no Wi-Fi updates, no phone audio: frees internal RAM
     --crash-test) DEFS+=" -DOTA_CRASH_TEST=1" ;;  # build only, then push it with ota_push.py
     --audio-spike) DEFS+=" -DAUDIO_SPIKE=1" ;;  # test build: mic, speaker and a link out, for measuring RAM (spike command)
-    --mirror-psram) DEFS+=" -DMIRROR_STACK_PSRAM=1" ;;  # test build: the mirror task's stack in PSRAM
+    --mirror-internal) DEFS+=" -DMIRROR_STACK_INTERNAL=1" ;;  # A/B build: the mirror task's stack in internal RAM, as before 0.2.6
     --small-gop) DEFS+=" -DGOP_CAP_KB=256" ;;  # test build: the GOP fills (freezes) within minutes
     *) PORT=$a ;;
   esac
