@@ -5,6 +5,8 @@
 #if BOARD_AMOLED_216
 #include <Arduino_GFX_Library.h>
 #include <esp_heap_caps.h>
+#include "driver/i2c_master.h"
+#include "freertos/idf_additions.h"
 #include <math.h>
 
 namespace {
@@ -279,10 +281,145 @@ void wake() {
   }
 }
 
-// --- state lines ---------------------------------------------------------------------------------------------
-const int DOT_X = 360, DOT_Y = 48, DOT_GAP = 24, DOT_R = 7;  // inside the panel's rounded corner
-String shownInfo;
-uint16_t shownDot[3] = {1, 1, 1};  // nothing drawn yet
+// --- pages -------------------------------------------------------------------------------------------------------
+// Page 0 is the face alone. Page 1 is the board's state, in words. A swipe up turns to it, a swipe down back to the
+// face; two small dots on the right edge show which page is up. The state page goes back to the face after a while
+// untouched.
+const uint32_t STATE_PAGE_MS = 30000;
+const int PAGE_DOT_X = 458, PAGE_DOT_R = 5, PAGE_DOT_GAP = 22;
+const uint16_t C_PAGE_ON = RGB565(200, 200, 200), C_PAGE_OFF = RGB565(70, 70, 70);
+const int LINE_X = 48, LINE_Y = 70, LINE_H = 44, LINES = 7;
+
+int page = 0;
+uint32_t pageAt = 0;
+ScreenInfo info;  // the latest state, for page 1
+bool haveInfo = false;
+String shown[LINES];
+uint16_t shownColor[LINES];
+
+void pageDots() {
+  for (int i = 0; i < 2; i++)
+    gfx->fillCircle(PAGE_DOT_X, H / 2 - PAGE_DOT_GAP / 2 + i * PAGE_DOT_GAP, PAGE_DOT_R, i == page ? C_PAGE_ON : C_PAGE_OFF);
+}
+
+void line(int i, const String &text, uint16_t color) {
+  if (shown[i] == text && shownColor[i] == color) return;
+  shown[i] = text;
+  shownColor[i] = color;
+  int y = LINE_Y + i * LINE_H;
+  gfx->fillRect(0, y, W, LINE_H, RGB565_BLACK);
+  gfx->setTextSize(3);
+  gfx->setTextColor(color);
+  gfx->setCursor(LINE_X, y + 10);
+  gfx->print(text);
+}
+
+void drawState() {
+  if (!haveInfo) return;
+  const ScreenInfo &s = info;
+  static const char *const apText[] = {"waiting", "connected", "mirroring"};
+  int ap = constrain(s.airplay, 0, 2);
+  line(0, "USB    " + String(s.usb == "ok" ? "connected" : s.usb), s.usb == "ok" ? C_OK : (s.usb == "off" ? C_BAD : C_WAIT));
+  line(1, "WiFi   " + String(s.net == "none" ? "none" : (s.net == "ap" ? "hotspot" : "home")), s.net == "none" ? C_BAD : C_OK);
+  line(2, "       " + (s.net == "ap" ? s.ssid : s.ip), C_DIM);
+  line(3, "Mirror " + String(apText[ap]), ap == 2 ? C_OK : C_WAIT);
+  line(4, ap == 2 ? "       " + String(s.fps, 1) + " fps" : "", C_DIM);
+  line(5, "Link   " + String(s.cli ? "computer" : (s.ble ? "app" : "none")), s.cli || s.ble ? C_OK : C_WAIT);
+  line(6, "fw " + s.fw, C_DIM);
+}
+
+void showPage(int p) {
+  page = p;
+  pageAt = millis();
+  gfx->fillScreen(RGB565_BLACK);
+  for (int i = 0; i < LINES; i++) shown[i] = "\x01";  // redraw every line
+  if (page == 1) drawState();
+  else drawn = false;  // the face draws itself on the next tick
+  pageDots();
+}
+
+// --- touch -------------------------------------------------------------------------------------------------------
+// The CST9220 touch controller, on the codecs' I2C bus (SDA 15, SCL 14, address 0x5A, interrupt 11, reset 40), read
+// the way SensorLib's TouchDrvCST92xx does. The loop reads it after each interrupt (a report while a finger is
+// down); a pause in them means the finger lifted. Only one finger and only swipes matter here.
+// It has its own ESP-IDF I2C master on the second controller: through Arduino's Wire, every transfer failed (error
+// 4 on every address) about a second after boot though the lines were idle high, and starting Wire over hung the
+// loop until the watchdog reset the board (2026-11-15). The boot sound uses Wire on the first controller and is
+// done with it before this starts.
+const int TP_INT = 11, TP_RST = 40, TP_ADDR = 0x5A;
+const int SWIPE_MIN = 70;           // pixels up or down
+const uint32_t TOUCH_LIFT_MS = 120;  // no report for this long: the finger lifted
+bool touchOk = false, touching = false;
+volatile bool touchIrq = false;
+volatile uint32_t touchIrqs = 0;
+uint32_t touchReads = 0, touchFails = 0, touchAt = 0;
+uint32_t touchSwipes = 0, touchChip = 0, touchCheck = 0;
+int touchX0 = 0, touchY0 = 0, touchX = 0, touchY = 0;
+
+i2c_master_bus_handle_t touchBus = nullptr;
+i2c_master_dev_handle_t touchDev = nullptr;
+const int TP_TIMEOUT_MS = 20;
+esp_err_t touchLastErr = ESP_OK;
+
+// a two-byte register read, as SensorLib's writeThenRead does it
+bool touchReg(uint8_t hi, uint8_t lo, uint8_t *out, int n) {
+  uint8_t w[2] = {hi, lo};
+  touchLastErr = i2c_master_transmit_receive(touchDev, w, 2, out, n, TP_TIMEOUT_MS);
+  return touchLastErr == ESP_OK;
+}
+
+void touchCmd(uint8_t hi, uint8_t lo, uint8_t v = 0, int len = 2) {
+  uint8_t w[3] = {hi, lo, v};
+  touchLastErr = i2c_master_transmit(touchDev, w, len, TP_TIMEOUT_MS);
+}
+
+void IRAM_ATTR onTouch() {
+  touchIrqs++;
+  touchIrq = true;
+}
+
+// one finger's position (screen pixels), false when no finger is down
+bool touchRead(int &x, int &y) {
+  uint8_t buf[12] = {0};
+  if (!touchReg(0xD0, 0x00, buf, sizeof buf)) {
+    touchFails++;
+    return false;
+  }
+  touchReads++;
+  touchCmd(0xD0, 0x00, 0xAB, 3);
+  if (buf[6] != 0xAB) return false;
+  int n = buf[5] & 0x7F;
+  if (n == 0 || n > 2 || (buf[0] & 0x0F) != 0x06) return false;
+  int rx = (buf[1] << 4) | (buf[3] >> 4), ry = (buf[2] << 4) | (buf[3] & 0x0F);
+  x = W - 1 - ry;  // the panel's axes: swapped, and x mirrored (Waveshare's example)
+  y = rx;
+  return true;
+}
+
+void touchPoll(uint32_t now) {
+  if (!touchOk) return;
+  int x, y;
+  if (touchIrq) {
+    touchIrq = false;
+    if (touchRead(x, y)) touchAt = now;
+    else return;
+    if (!touching) {
+      touching = true;
+      touchX0 = x, touchY0 = y;
+      wake();  // a touch wakes the face up
+    }
+    touchX = x, touchY = y;
+    pageAt = now;
+    return;
+  }
+  if (!touching || now - touchAt < TOUCH_LIFT_MS) return;
+  touching = false;  // the finger lifted: was it a swipe?
+  int dx = touchX - touchX0, dy = touchY - touchY0;
+  if (abs(dy) >= SWIPE_MIN && abs(dy) > 2 * abs(dx)) {  // up: the state page; down: the face
+    touchSwipes++;
+    showPage(dy < 0 ? 1 : 0);
+  }
+}
 
 }  // namespace
 
@@ -298,6 +435,7 @@ bool screen_begin() {
   blinkAt = millis() + 1500;
   wanderAt = millis() + 2500;
   activeAt = millis() | 1;
+  pageDots();
   return true;
 }
 
@@ -340,8 +478,13 @@ void screen_wakeup() {
 void screen_tick() {
   if (!gfx || !pic) return;
   uint32_t now = millis();
+  touchPoll(now);
   if (now - lastFrame < FRAME_MS) return;
   lastFrame = now;
+  if (page == 1) {
+    if (!touching && now - pageAt > STATE_PAGE_MS) showPage(0);  // back to the face
+    else return;  // the face waits behind the state page
+  }
 
   // the mood moves on by itself
   if (moodUntil && (int32_t)(now - moodUntil) >= 0) setMood(MOOD_NEUTRAL, 0);
@@ -433,25 +576,59 @@ void screen_tick() {
 
 void screen_show(const ScreenInfo &s) {
   if (!gfx) return;
-  // bottom: version and address, small and dim
-  String info = "fw " + s.fw + "   " + (s.net == "ap" ? s.ssid + " / " + s.pass : (s.net == "none" ? "no Wi-Fi" : s.ip));
-  if (info != shownInfo) {
-    shownInfo = info;
-    gfx->fillRect(0, 395, W, 24, RGB565_BLACK);
-    gfx->setTextSize(2);
-    gfx->setTextColor(C_DIM);
-    gfx->setCursor((W - (int)info.length() * 12) / 2, 399);
-    gfx->print(info);
-  }
-  // top right: a dot each for the phone's USB, Wi-Fi and mirroring, no words
-  int ap = constrain(s.airplay, 0, 2);
-  uint16_t c[3] = {s.usb == "ok" ? C_OK : (s.usb == "off" ? C_BAD : C_WAIT), s.net == "none" ? C_BAD : C_OK,
-                   ap == 2 ? C_OK : C_WAIT};
-  for (int i = 0; i < 3; i++) {
-    if (c[i] == shownDot[i]) continue;
-    shownDot[i] = c[i];
-    gfx->fillCircle(DOT_X + i * DOT_GAP, DOT_Y, DOT_R, c[i]);
-  }
+  info = s;
+  haveInfo = true;
+  if (page == 1) drawState();
+}
+
+String screen_i2c_scan() {  // debugging: who answers on the touch chip's bus
+  if (!touchBus) return "no bus";
+  String r = "ok";
+  for (int a = 0x08; a < 0x78; a++)
+    if (i2c_master_probe(touchBus, a, TP_TIMEOUT_MS) == ESP_OK) r += " " + String(a, HEX);
+  return r;
+}
+
+String screen_touch_info() {
+  char b[220];
+  snprintf(b, sizeof b, "ok %d chip %lx check %lx err %d irqs %lu reads %lu fails %lu swipes %lu page %d last %d,%d from %d,%d",
+           touchOk, (unsigned long)touchChip, (unsigned long)touchCheck, (int)touchLastErr, (unsigned long)touchIrqs,
+           (unsigned long)touchReads, (unsigned long)touchFails, (unsigned long)touchSwipes, page, touchX, touchY,
+           touchX0, touchY0);
+  return b;
+}
+
+void screen_touch_begin() {
+  if (!gfx || touchOk) return;
+  pinMode(TP_RST, OUTPUT);
+  digitalWrite(TP_RST, LOW);
+  delay(10);
+  digitalWrite(TP_RST, HIGH);
+  delay(30);  // out of its boot mode
+  i2c_master_bus_config_t bc = {};
+  bc.i2c_port = I2C_NUM_1;
+  bc.sda_io_num = GPIO_NUM_15;
+  bc.scl_io_num = GPIO_NUM_14;
+  bc.clk_source = I2C_CLK_SRC_DEFAULT;
+  bc.glitch_ignore_cnt = 7;
+  bc.flags.enable_internal_pullup = true;
+  if ((touchLastErr = i2c_new_master_bus(&bc, &touchBus)) != ESP_OK) return;
+  i2c_device_config_t dc = {};
+  dc.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+  dc.device_address = TP_ADDR;
+  dc.scl_speed_hz = 100000;  // as Waveshare's example
+  if ((touchLastErr = i2c_master_bus_add_device(touchBus, &dc, &touchDev)) != ESP_OK) return;
+  // as SensorLib's begin: command mode, the chip's check code and type (CST9220 / CST9217), then normal mode
+  touchCmd(0xD1, 0x01);
+  if (touchLastErr != ESP_OK) return;
+  delay(10);
+  uint8_t b[4] = {0};
+  if (touchReg(0xD1, 0xFC, b, 4)) touchCheck = b[0] | b[1] << 8 | b[2] << 16 | (uint32_t)b[3] << 24;
+  if (touchReg(0xD2, 0x04, b, 4)) touchChip = b[2] | b[3] << 8;
+  touchCmd(0xD1, 0x09);
+  touchOk = true;
+  pinMode(TP_INT, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(TP_INT), onTouch, FALLING);
 }
 
 #else
@@ -459,6 +636,9 @@ bool screen_begin() { return false; }
 void screen_show(const ScreenInfo &) {}
 void screen_wakeup() {}
 void screen_tick() {}
+void screen_touch_begin() {}
+String screen_touch_info() { return "no screen"; }
+String screen_i2c_scan() { return "no screen"; }
 void screen_look(float, float) {}
 void screen_active() {}
 void screen_tap() {}

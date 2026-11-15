@@ -274,6 +274,8 @@ String board(const String &line, const String &id, char who) {
     return "err usage: face neutral|work|think|happy|ask|sad|sleep [seconds]";
   }
   if (cmd == "spike") return audio_spike(arg);  // test builds: does a voice pipeline fit (audio_spike.cpp)
+  if (cmd == "touch" && arg == "scan") return screen_i2c_scan();
+  if (cmd == "touch") return "ok " + screen_touch_info();  // what the touch screen saw (status_screen.cpp)
   if (cmd == "logs") return board_log_page(arg);  // the RAM log, a page at a time (logbuf.h)
   if (cmd == "vdbg") return "ok " + video_debug();  // why a frozen screen stays frozen (video_link.cpp)
   if (cmd == "crash") return String("ok rst ") + resetReason() + ", last dump: " + lastCrash;
@@ -494,6 +496,13 @@ void loop() {
 #if BOARD_AMOLED_216
   screenPoll();
   screen_tick();
+  // The touch chip shares its I2C pins with the speaker's codec, and the yawn's Wire.end() resets them when it
+  // finishes, which can be after setup's wait. So touch starts only once the sound is over.
+  static bool touchStarted = false;
+  if (!touchStarted && !boot_sound_busy()) {
+    touchStarted = true;
+    screen_touch_begin();
+  }
 #endif
   bool cli = cli_slot() >= 0;
   // A gesture cut off mid-way must not leave the button held (long press); only the side that went holds it.

@@ -3,7 +3,7 @@
 // Other builds compile none of this.
 //
 // Two robot eyes fill the middle of the screen: they blink, look around when nothing happens, and turn to where the
-// agent is working on the phone (`look x y`). A dim line on top and dots at the bottom show the board's state.
+// agent is working on the phone (`look x y`). A swipe up turns to a second page with the board's state.
 #pragma once
 #include <Arduino.h>
 
@@ -23,6 +23,9 @@ struct ScreenInfo {
 bool screen_begin();                    // false when the panel did not come up
 void screen_show(const ScreenInfo &s);  // redraws the state lines that changed
 void screen_wakeup();                   // after boot: the face wakes up with a yawn (boot_sound.h plays it)
+void screen_touch_begin();              // the touch screen, for swiping between the face and the state page
+String screen_touch_info();             // what the touch screen saw, for the `touch` command
+String screen_i2c_scan();               // debugging: the addresses that answer on the touch chip's I2C bus
 void screen_tick();                     // moves the eyes on; call it often (loop)
 void screen_look(float x, float y);     // look at this point of the phone's screen (fractions, 0-1)
 
