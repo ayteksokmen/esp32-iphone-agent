@@ -62,6 +62,8 @@ Python socket on a computer stood in for the cloud.
     31.3 KB each time.
   - About 18 minutes of mirroring with a screenshot every 30 s: no freeze, no overflow, free internal RAM steady at
     30.4–31.3 KB, all 36 screenshots arrived. It ended when the phone locked itself.
+  - A firmware update over Wi-Fi while mirroring: 1.6 MB in 18 s, then a clean restart into the new image.
+    Mirroring came back with `remirror`.
 - **Before:** about 23 KB free while mirroring.
 
 ## Not measured yet
