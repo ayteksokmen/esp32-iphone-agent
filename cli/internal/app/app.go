@@ -46,6 +46,8 @@ const usage = `esp32agent: see and drive an iPhone through an ESP32 Agent board,
                                    Bluetooth, then moves the link to Wi-Fi (the iPhone mirrors over it too)
   net join SSID [PASSWORD]         the same, non-interactive
   net hotspot                      the board opens its own hotspot again
+  ask "TASK" [--model M]           do a task on the phone with the Claude API (ANTHROPIC_API_KEY), no Claude Code;
+                                   Haiku by default; logs each task's tokens and cost to asks.jsonl
   cloud [HOST:PORT | off]          the cloud relay: the board dials out to it, and this computer reaches the
                                    board through it from anywhere (the session stays end-to-end encrypted)
   cloud BOARD_ADDR MY_ADDR         the same relay under two names: the board's (home network) and this
@@ -224,6 +226,20 @@ func (a *App) Run(args []string) int {
 			text = "join " + pos[1] + "\x00" + strings.Join(pos[2:], " ")
 		}
 		return a.call(daemon.Request{Cmd: "net", Device: *dev, Text: text})
+	case "ask":
+		model := fs.String("model", "", "model: claude-haiku-5-5 (default with ANTHROPIC_API_KEY), gpt-6-luna (default with only OPENAI_API_KEY), ...")
+		turns := fs.Int("max-turns", 40, "give up after this many model turns")
+		pos, err := parse(fs, rest)
+		if err != nil {
+			return a.fail(err)
+		}
+		if len(pos) == 0 {
+			return a.fail(errors.New("usage: esp32agent ask [--model M] [--max-turns N] \"TASK\""))
+		}
+		if *dev != "" {
+			os.Setenv("ESP32AGENT_DEVICE", *dev) // callTool's board
+		}
+		return a.ask(strings.Join(pos, " "), *model, *turns)
 	case "cloud":
 		pos, err := parse(fs, rest)
 		if err != nil {
