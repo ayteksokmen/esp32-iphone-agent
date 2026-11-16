@@ -133,7 +133,7 @@ func (a *App) askOpenAI(task string, shot []anthropic.ToolResultBlockParamConten
 		}
 		t0 := time.Now()
 		r, err := oaiCall(ctx, oaiMsg{"model": model, "messages": msgs, "tools": tl, "parallel_tool_calls": false,
-			"max_completion_tokens": 4096})
+			"max_completion_tokens": 4096, "reasoning_effort": "none"}) // Chat Completions takes tools only without reasoning
 		if err != nil {
 			res.Stopped = "API: " + err.Error()
 			return
