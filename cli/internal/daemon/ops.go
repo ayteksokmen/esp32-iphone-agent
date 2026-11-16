@@ -125,6 +125,18 @@ func (s *Server) recent(ctx context.Context, c *Conn) error {
 	if wait(5 * time.Second) {
 		return nil
 	}
+	// Still behind, but catching up: after a reconnect the decoder goes through the board's buffered GOP, which takes
+	// longer than 5 s once the GOP holds minutes of pictures (2026-11-16, "only older ones" after every relay
+	// reconnect). Keep waiting while pictures arrive, up to CatchUpFor.
+	for end := time.Now().Add(CatchUpFor); time.Now().Before(end); {
+		before, _, _, _ := c.times()
+		if wait(3 * time.Second) {
+			return nil
+		}
+		if after, _, _, _ := c.times(); !after.After(before) {
+			break // nothing new came in 3 s: not catching up
+		}
+	}
 	captured, _, _, _ := c.times()
 	_, since := c.current()
 	return fmt.Errorf("the latest picture from the iPhone did not come through, only older ones (the newest here is "+
@@ -140,6 +152,9 @@ func age(t time.Time) string {
 
 // SilentFor: an unlocked iPhone sends a frame at least when its clock turns over, once a minute.
 const SilentFor = 75 * time.Second
+
+// CatchUpFor: how long a screenshot waits for a decoder that is still going through buffered pictures.
+const CatchUpFor = 45 * time.Second
 
 func encode(img image.Image, format string, quality int, scale float64, maxSize int) ([]byte, image.Rectangle, error) {
 	b := img.Bounds()
